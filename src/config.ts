@@ -62,6 +62,9 @@ const schema = z
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).default(15),
 
     // Monad
+    COINSTATS_API_KEY: z.string().default(""),
+    COINSTATS_API_BASE_URL: z.string().url().default("https://openapiv1.coinstats.app"),
+
     MONAD_RPC_URL: z.string().url(),
     MONAD_CHAIN_ID: z.coerce.number().int().positive(),
     MONAD_EXPLORER_URL: z.string().url().optional(),
