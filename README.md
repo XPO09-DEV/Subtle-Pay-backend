@@ -72,17 +72,3 @@ Node 22 is required. Do not commit `.env`, `node_modules`, or `data/`.
 ## Layout
 
 `src/server.ts` mounts the routes. `src/lib` holds passwords, tokens, encryption, currency math, and errors. `src/chain/monad.ts` reads and sends. `src/modules` is auth, alias, contacts, rates, wallet, payments, bills, mandates, withdraw, and the bridge preview. SQLite is `data/subtle.db`.
-
-
-## CoinStats market-data proxy
-
-The market widget uses the backend routes `GET /market/monad/assets` and `GET /market/monad/charts/:coinId`. These routes call the CoinStats Open API with the server-only `X-API-KEY` header. Asset requests always add the fixed `blockchains=monad` filter, and chart requests are allowed only for IDs that CoinStats returns under that Monad filter.
-
-Set these in your local ignored `.env` file:
-
-```dotenv
-COINSTATS_API_KEY=your_rotated_coinstats_key
-COINSTATS_API_BASE_URL=https://openapiv1.coinstats.app
-```
-
-Never put the CoinStats key in frontend `VITE_*` variables or commit it to Git. Set the same environment variables in your backend deployment settings. Market responses are cached briefly to reduce API usage.
