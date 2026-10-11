@@ -41,7 +41,7 @@ const chartCache = new Map<string, { expiresAt: number; payload: CoinStatsChart 
 const allowedCoinIds = new Map<string, number>();
 
 function coinStatsBase(): string {
-  return config.COINSTATS_API_BASE_URL.replace(/\\/+$/, "");
+  return config.COINSTATS_API_BASE_URL.replace(/\/+$/, "");
 }
 
 async function coinStatsJson<T>(path: string): Promise<T> {
