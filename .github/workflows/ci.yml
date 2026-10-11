@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install dependencies (lockfile is currently incomplete)
-        run: npm install --no-audit --no-fund
+      - name: Install locked dependencies
+        run: npm ci
       - name: Type-check backend
         run: npm run typecheck
