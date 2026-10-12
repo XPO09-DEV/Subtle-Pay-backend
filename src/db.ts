@@ -226,6 +226,17 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_mandates_user ON mandates(user_id, created_at);
     `,
   },
+  {
+    version: 4,
+    name: "consented_user_profile",
+    sql: `
+      ALTER TABLE users ADD COLUMN display_name TEXT
+        CHECK (display_name IS NULL OR length(display_name) BETWEEN 1 AND 80);
+      ALTER TABLE users ADD COLUMN region TEXT
+        CHECK (region IS NULL OR length(region) BETWEEN 1 AND 80);
+      ALTER TABLE users ADD COLUMN region_consent_at INTEGER;
+    `,
+  },
 ];
 
 const checksum = (sql: string) =>
@@ -318,6 +329,9 @@ export interface UserRow {
   locked_until: number | null;
   created_at: number;
   updated_at: number;
+  display_name: string | null;
+  region: string | null;
+  region_consent_at: number | null;
 }
 
 export interface WalletRow {

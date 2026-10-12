@@ -41,6 +41,21 @@ const schema = z
     // Storage
     DB_PATH: z.string().default("./data/subtle.db"),
 
+    // Server-only provider credentials. Never prefix these with VITE_.
+    ANKR_API_KEY: z.preprocess(
+      (value) => typeof value === "string" && value.trim() ? value.trim() : undefined,
+      z.string().min(1).optional()
+    ),
+    COINSTATS_API_KEY: z.preprocess(
+      (value) => typeof value === "string" && value.trim() ? value.trim() : undefined,
+      z.string().min(1).optional()
+    ),
+    COINSTATS_API_BASE_URL: z.string().url().default("https://openapiv1.coinstats.app"),
+    ADMIN_API_TOKEN: z.preprocess(
+      (value) => typeof value === "string" && value.trim() ? value.trim() : undefined,
+      z.string().min(32, "must be at least 32 characters").optional()
+    ),
+
     // Secrets (each must be distinct; generate with 32 random bytes)
     JWT_ACCESS_SECRET: hexBytes(32),
     PASSWORD_PEPPER: hexBytes(32),
@@ -111,6 +126,16 @@ const schema = z
           path: [k],
           message: "is required in production",
         });
+      }
+      const providerSecrets = ["ANKR_API_KEY", "COINSTATS_API_KEY", "ADMIN_API_TOKEN"] as const;
+      for (const key of providerSecrets) {
+        if (!cfg[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: "is required in production; configure it in the server environment, never in source control",
+          });
+        }
       }
     }
   });

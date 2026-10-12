@@ -1,74 +1,64 @@
-# Subtle Pay
+# Subtle Pay Backend
 
-A UPI-style payment app on Monad testnet. The user gets a 27-character account id, a password, and a custodial wallet. They pay an alias, a saved contact, or a merchant QR in INR, USD, or any of 48 currencies. The server converts the amount and settles in MON.
+Fastify + TypeScript API with SQLite persistence, Argon2id password hashing, encrypted custodial wallet keys, rotating refresh tokens, and a hash-chained audit trail.
 
-Hackathon: Monad Metropolis. Backend is this repo. Frontend is separate.
+## Run locally
 
-## What is real
-
-A Monad testnet payment was confirmed.
-
-- Sender: `0xF384831F4233421660B8d35a590A20395366B3fe`
-- Receiver: `0x8af044aC82Fa66C8Dbd2b02cF5C029D13C25598f`
-- Transaction: [`0x2e1b73b0472134d4f573a434ba341305ae9721a72a44bba648b98971d8b91156`](https://testnet.monadvision.com/tx/0x2e1b73b0472134d4f573a434ba341305ae9721a72a44bba648b98971d8b91156)
-- Chain id: `10143`
-
-Also working: register, login, refresh, logout, home screen, alias, private contacts, 48-currency quotes, MON price in those currencies, payment history, mock withdraw, merchant bills, and capped autopay mandates.
-
-## What is a preview
-
-`POST /bridge/preview` shows how a Base or Arbitrum payment would reach a Monad handle. The response is `mode: "simulated"` and `settled: false`. No bridge transaction is sent. Do not treat it as a completed payment.
-
-## How a payment works
-
-1. Register with a password. The API returns the account id, a session, and a Monad address. The private key stays encrypted on the server.
-2. Fund that address from the [Monad faucet](https://faucet.monad.xyz).
-3. Pay by alias, contact name, account id, or address. The amount can be INR, EUR, USD, or another supported currency.
-4. The server freezes the rate, converts to MON, signs, and broadcasts.
-5. A merchant bill is the same send, opened by a QR and closed when the bill status is `paid`.
-
-The handle is `alias@monad`, or the account id if no alias is set. It resolves to the Monad wallet. It does not yet receive funds from another chain.
-
-## Run
+Requirements: Node.js 22 or newer.
 
 ```bash
 cp .env.example .env
-npm install
-npx tsx src/server.ts
+npm ci
+npm run typecheck
+npm run dev
 ```
 
-The API listens on `http://127.0.0.1:4000`. `GET /health` returns `{ "ok": true }`.
+The API listens on `http://127.0.0.1:4000`; `GET /health` reports health. Generate distinct values for `JWT_ACCESS_SECRET`, `PASSWORD_PEPPER`, and `MASTER_KEY`, then configure a separate long random `ADMIN_API_TOKEN`. Keep `.env`, `data/`, wallet keys and provider credentials out of Git.
 
-Node 22 is required. Do not commit `.env`, `node_modules`, or `data/`.
+## Provider integrations
 
-## Demo script
+### Ankr
 
-1. Register two accounts. Fund the sender.
-2. Save the receiver as a contact named `ani`.
-3. `GET /rates/quote?from=EUR&to=INR&amount=10`
-4. `GET /rates/token?currency=INR`
-5. Merchant: `POST /bills` with `{ "amount": "400", "currency": "INR" }`. Put `qr` in a QR code.
-6. Customer: `GET /bills/:id`, then `POST /bills/:id/pay`.
-7. Open the returned hash on MonadVision.
+`GET /api/wallet/assets?address=0x...` proxies account-balance discovery on the server. It validates EVM addresses, paginates indexed balances, reads native MON via the configured Monad RPC where available, coalesces concurrent requests, caches for 60 seconds, and applies a route-specific rate limit. Results are public-chain data and do not prove the caller owns a wallet. Network coverage depends on provider plan/support and indexer availability.
+
+Set `ANKR_API_KEY` only in the backend environment. It is never returned to clients.
+
+### CoinStats
+
+`GET /market/search?q=bitcoin`, `GET /market/coins`, `GET /market/coins/:coinId`, `GET /market/coins/:coinId/charts?period=3m`, and `GET /market/markets` proxy CoinStats using server-only `X-API-KEY` authentication, request coalescing, short-lived caches and route-level rate limits.
+
+Set `COINSTATS_API_KEY` only on the server. The default API origin is `https://openapiv1.coinstats.app`.
+
+## Account, privacy and exports
+
+The database records account/wallet creation times, authentication events, refresh-session IP/user-agent/time metadata and payments created through this backend. A new versioned migration adds display name plus an optional user-supplied region and consent timestamp. Region is never inferred from IP and is only returned/exported after the user opts in. Publish a privacy notice and define retention before production.
+
+Configure a long random `ADMIN_API_TOKEN` in the server environment. Requests require `X-Admin-Token`; comparisons are constant time and endpoints are rate-limited.
+
+- `GET /admin/overview` — account/wallet/payment counts, confirmed and unsettled payments, recent logins and opted-in regions.
+- `GET /admin/export.csv?dataset=users` — account name/handle, wallet address and creation times, last login, recent session IP/user-agent and consented region.
+- `GET /admin/export.csv?dataset=payments` — in-app payments, sender/recipient addresses, amounts, statuses, timestamps, rates and transaction hashes.
+- `GET /admin/export.csv?dataset=sessions` — session metadata without token secrets/hashes.
+- `GET /admin/export.csv?dataset=audit` — audit actions, timestamps, details, IP and hash-chain metadata.
+
+CSV is UTF-8 and opens in Excel. Exports are capped, spreadsheet formula injection is neutralized, responses are not cacheable, and sensitive key/password/token fields are excluded.
+
+## Commercial launch status — important
+
+This backend is **not yet certified production-ready**. The configured chain may still be Monad testnet (chain ID 10143). A production rollout needs a verified mainnet RPC/chain ID, deployed and audited contracts, funded production relayer, key rotation/recovery, monitoring, backups/restore tests, abuse controls and an independent security review.
+
+The fiat-withdrawal route is currently a mock and cross-chain bridge is only a simulated preview; do not treat them as real commercial rails. Those paths must be disabled until genuine payout/bridge integrations are implemented. The payment service supports only its configured Monad settlement path. Review applicable KYC/AML/sanctions, consumer protection, custody, privacy, retention, accounting and tax requirements with qualified professionals before accepting commercial users.
 
 ## Main routes
 
 | Route | Purpose |
 |---|---|
-| `POST /auth/register` | Create account, wallet, and session |
-| `POST /auth/login` | Session from account id and password |
-| `GET /home` | Account id, alias, address, balances, rate |
-| `POST /alias` | Public name |
-| `POST /contacts` | Private name for someone else's account |
-| `GET /rates/quote` | Any supported currency pair |
-| `GET /rates/token` | MON price in that currency |
-| `POST /payments/send` | Settle on Monad |
-| `GET /payments` | History |
-| `POST /bills` | Merchant QR bill, expires in 4 minutes |
-| `POST /bills/:id/pay` | Customer pays the bill |
-| `POST /mandates` | Cap for a later Monad pull |
-| `POST /bridge/preview` | Labeled cross-chain preview, no settlement |
+| `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout` | Accounts and sessions |
+| `GET /me`, `GET /home` | Authenticated identity |
+| `GET /wallet` | Custodial Monad wallet summary |
+| `POST /payments/send`, `GET /payments` | Payments and history |
+| `GET /api/wallet/assets` | Rate-limited Ankr balance proxy |
+| `GET /market/*` | Cached CoinStats market proxy |
+| `GET /admin/overview`, `GET /admin/export.csv` | Admin view and exports |
 
-## Layout
-
-`src/server.ts` mounts the routes. `src/lib` holds passwords, tokens, encryption, currency math, and errors. `src/chain/monad.ts` reads and sends. `src/modules` is auth, alias, contacts, rates, wallet, payments, bills, mandates, withdraw, and the bridge preview. SQLite is `data/subtle.db`.
+SQLite files live under `data/`. Add new checksummed migrations; never edit applied migrations.
