@@ -5,6 +5,8 @@ import { getHome } from "./home.js";
 import { currentUser, requireAuth } from "../../middleware/auth.js";
 import { revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.js";
 import { audit } from "../../lib/audit.js";
+import { unauthorized } from "../../lib/errors.js";
+import { config } from "../../config.js";
 
 const passwordSchema = z.string().min(1).max(128);
 const registerBody = z.object({ password: passwordSchema });
@@ -29,7 +31,34 @@ const profileBody = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["shareRegion"], message: "Explicit region-sharing consent is required" });
   }
 });
-const refreshBody = z.object({ refreshToken: z.string().min(20).max(128) });
+const refreshBody = z.object({ refreshToken: z.string().min(20).max(128).optional() }).default({});
+
+const REFRESH_COOKIE = "subtlepay_refresh";
+function cookieValue(req: { headers: { cookie?: string } }, name: string): string | null {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const segment of header.split(";")) {
+    const index = segment.indexOf("=");
+    if (index < 0) continue;
+    if (segment.slice(0, index).trim() === name) {
+      try { return decodeURIComponent(segment.slice(index + 1).trim()); }
+      catch { return null; }
+    }
+  }
+  return null;
+}
+function refreshCookie(value: string, clear = false): string {
+  const parts = [
+    `${REFRESH_COOKIE}=${clear ? "" : encodeURIComponent(value)}`,
+    "Path=/auth",
+    "HttpOnly",
+    "SameSite=None",
+    "Secure",
+    "Priority=High",
+    `Max-Age=${clear ? 0 : config.REFRESH_TOKEN_TTL_DAYS * 86400}`,
+  ];
+  return parts.join("; ");
+}
 
 function meta(req: { ip: string; headers: { "user-agent"?: string | string[] } }) {
   const ua = req.headers["user-agent"];
@@ -37,35 +66,40 @@ function meta(req: { ip: string; headers: { "user-agent"?: string | string[] } }
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
-  app.post("/auth/register", async (req) => {
+  app.post("/auth/register", async (req, reply) => {
     const body = registerBody.parse(req.body);
-    return register(body.password, meta(req));
+    const result = await register(body.password, meta(req));
+    reply.header("set-cookie", refreshCookie(result.refreshToken));
+    return { accountId: result.accountId, token: result.token, expiresIn: result.expiresIn, address: result.address };
   });
 
-  app.post("/auth/login", async (req) => {
+  app.post("/auth/login", async (req, reply) => {
     const body = loginBody.parse(req.body);
-    return login(body.accountId, body.password, meta(req));
+    const result = await login(body.accountId, body.password, meta(req));
+    reply.header("set-cookie", refreshCookie(result.refreshToken));
+    return { token: result.token, expiresIn: result.expiresIn };
   });
 
-  app.post("/auth/refresh", async (req) => {
-    const body = refreshBody.parse(req.body);
+  app.post("/auth/refresh", async (req, reply) => {
+    const body = refreshBody.parse(req.body ?? {});
+    const refreshToken = cookieValue(req, REFRESH_COOKIE) ?? body.refreshToken;
+    if (!refreshToken) throw unauthorized("Refresh session is missing or expired");
     try {
-      const next = await rotateSession(body.refreshToken, meta(req));
-      return {
-        token: next.accessToken,
-        refreshToken: next.refreshToken,
-        expiresIn: next.accessTokenExpiresIn,
-      };
+      const next = await rotateSession(refreshToken, meta(req));
+      reply.header("set-cookie", refreshCookie(next.refreshToken));
+      return { token: next.accessToken, expiresIn: next.accessTokenExpiresIn };
     } catch (err) {
       if (err instanceof TokenReuseError) audit(err.userId, "auth.token_reused", undefined, req.ip);
+      reply.header("set-cookie", refreshCookie("", true));
       throw err;
     }
   });
 
-  app.post("/auth/logout", { preHandler: requireAuth }, async (req) => {
+  app.post("/auth/logout", { preHandler: requireAuth }, async (req, reply) => {
     const user = currentUser(req);
     revokeSession(user.sessionId);
     audit(user.id, "auth.logout", undefined, req.ip);
+    reply.header("set-cookie", refreshCookie("", true));
     return { ok: true };
   });
 
