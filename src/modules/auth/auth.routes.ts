@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { changePassword, getMe, login, register, setCurrency } from "./auth.service.js";
+import { changePassword, getMe, login, register, setCurrency, updateProfile } from "./auth.service.js";
 import { getHome } from "./home.js";
 import { currentUser, requireAuth } from "../../middleware/auth.js";
 import { revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.js";
@@ -17,6 +17,18 @@ const changeBody = z.object({
   newPassword: passwordSchema,
 });
 const currencyBody = z.object({ currency: z.string().length(3) });
+const profileBody = z.object({
+  displayName: z.union([z.string().trim().max(80), z.null()]).optional(),
+  region: z.union([z.string().trim().min(1).max(80), z.null()]).optional(),
+  shareRegion: z.boolean().optional(),
+}).superRefine((value, ctx) => {
+  if (value.shareRegion === true && !value.region?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["region"], message: "Choose a region to share" });
+  }
+  if (value.region !== undefined && value.shareRegion === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["shareRegion"], message: "Explicit region-sharing consent is required" });
+  }
+});
 const refreshBody = z.object({ refreshToken: z.string().min(20).max(128) });
 
 function meta(req: { ip: string; headers: { "user-agent"?: string | string[] } }) {
@@ -70,5 +82,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.put("/me/currency", { preHandler: requireAuth }, async (req) => {
     const body = currencyBody.parse(req.body);
     return setCurrency(currentUser(req).id, body.currency);
+  });
+
+  // Region is never inferred from IP; an authenticated user must explicitly opt in.
+  app.put("/me/profile", { preHandler: requireAuth }, async (req) => {
+    const body = profileBody.parse(req.body);
+    const user = currentUser(req);
+    const profile = updateProfile(user.id, body);
+    audit(user.id, "profile.updated", {
+      displayNameChanged: body.displayName !== undefined,
+      regionSharing: body.shareRegion === true ? "enabled" : body.shareRegion === false ? "disabled" : "unchanged",
+    }, req.ip);
+    return profile;
   });
 }
