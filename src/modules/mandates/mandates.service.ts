@@ -42,14 +42,15 @@ export async function runMandate(userId: string, id: string, amount: string, ip?
     | undefined;
   if (!mandate) throw notFound("Mandate not found");
   if (mandate.status !== "active") throw badRequest("Mandate is not active");
-  const rates = await getRates(mandate.currency);
-  const entered = mandate.currency === "USD" ? parseUsdToMicro(amount) : parseAmountMinor(amount, mandate.currency);
-  const micro = mandate.currency === "USD" ? entered : localMinorToUsdMicro(entered, rates.usdLocal, mandate.currency);
+  const currency = assertCurrency(mandate.currency);
+  const rates = await getRates(currency);
+  const entered = currency === "USD" ? parseUsdToMicro(amount) : parseAmountMinor(amount, currency);
+  const micro = currency === "USD" ? entered : localMinorToUsdMicro(entered, rates.usdLocal, currency);
   if (micro > mandate.cap_micro) throw badRequest("Amount is above the mandate cap", "LIMIT_EXCEEDED");
   const paid = await sendPayment(userId, {
     to: mandate.merchant_id,
     amount,
-    amountCurrency: mandate.currency,
+    amountCurrency: currency,
     note: `mandate ${id}`,
   }, ip);
   audit(userId, "mandate.run", { id, txId: paid.txId }, ip);
