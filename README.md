@@ -47,17 +47,18 @@ CSV is UTF-8 and opens in Excel. Exports are capped, spreadsheet formula injecti
 
 This backend is **not yet certified production-ready**. The configured chain may still be Monad testnet (chain ID 10143). A production rollout needs a verified mainnet RPC/chain ID, deployed and audited contracts, funded production relayer, key rotation/recovery, monitoring, backups/restore tests, abuse controls and an independent security review.
 
-The fiat-withdrawal route is currently a mock and cross-chain bridge is only a simulated preview; do not treat them as real commercial rails. Those paths must be disabled until genuine payout/bridge integrations are implemented. The payment service supports only its configured Monad settlement path. Review applicable KYC/AML/sanctions, consumer protection, custody, privacy, retention, accounting and tax requirements with qualified professionals before accepting commercial users.
+The fiat-withdrawal route is disabled until a real payout provider is integrated. Cross-chain bridging is disabled and no bridge transaction is implemented. The payment service supports only its configured Monad settlement path. Review applicable KYC/AML/sanctions, consumer protection, custody, privacy, retention, accounting and tax requirements with qualified professionals before accepting commercial users.
 
 ## Main routes
 
 | Route | Purpose |
 |---|---|
 | `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout` | Accounts and sessions |
-| `GET /me`, `GET /home` | Authenticated identity |
+| `GET /me`, `GET /home`, `PUT /me/profile` | Authenticated identity/profile |
 | `GET /wallet` | Custodial Monad wallet summary |
 | `POST /payments/send`, `GET /payments` | Payments and history |
 | `GET /api/wallet/assets` | Rate-limited Ankr balance proxy |
+| `PUT /me/profile` | Profile name and explicit region-sharing consent |
 | `GET /market/*` | Cached CoinStats market proxy |
 | `GET /admin/overview`, `GET /admin/export.csv` | Admin view and exports |
 
