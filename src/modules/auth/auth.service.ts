@@ -127,14 +127,57 @@ export async function changePassword(
 }
 
 export function getMe(userId: string) {
-  const user = db.prepare("SELECT id, currency FROM users WHERE id = ?").get(userId) as
-    | { id: string; currency: string }
+  const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at FROM users WHERE id = ?").get(userId) as
+    | { id: string; currency: string; display_name: string | null; region: string | null; region_consent_at: number | null }
     | undefined;
   if (!user) throw invalidCredentials();
   const alias = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as
     | { alias: string }
     | undefined;
-  return { accountId: user.id, alias: alias?.alias ?? null, currency: user.currency };
+  return {
+    accountId: user.id,
+    alias: alias?.alias ?? null,
+    displayName: user.display_name,
+    currency: user.currency,
+    region: user.region_consent_at ? user.region : null,
+    regionConsentAt: user.region_consent_at,
+  };
+}
+
+export function updateProfile(
+  userId: string,
+  input: { displayName?: string | null; region?: string | null; shareRegion?: boolean }
+) {
+  const existing = db.prepare(
+    "SELECT display_name, region, region_consent_at FROM users WHERE id = ?"
+  ).get(userId) as
+    | { display_name: string | null; region: string | null; region_consent_at: number | null }
+    | undefined;
+  if (!existing) throw invalidCredentials();
+
+  let displayName = existing.display_name;
+  if (input.displayName !== undefined) {
+    const cleaned = input.displayName?.trim().slice(0, 80) ?? "";
+    displayName = cleaned || null;
+  }
+
+  let region = existing.region;
+  let regionConsentAt = existing.region_consent_at;
+  if (input.shareRegion === true) {
+    const cleanedRegion = input.region?.trim().slice(0, 80);
+    if (!cleanedRegion) throw badRequest("Choose a region before opting in to share it", "BAD_REQUEST");
+    region = cleanedRegion;
+    regionConsentAt = Date.now();
+  } else if (input.shareRegion === false) {
+    region = null;
+    regionConsentAt = null;
+  }
+
+  db.prepare(
+    "UPDATE users SET display_name = ?, region = ?, region_consent_at = ?, updated_at = ? WHERE id = ?"
+  ).run(displayName, region, regionConsentAt, Date.now(), userId);
+
+  return { displayName, region: regionConsentAt ? region : null, regionConsentAt };
 }
 
 export function setCurrency(userId: string, currency: string): { currency: Currency } {
