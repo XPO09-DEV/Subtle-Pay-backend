@@ -27,7 +27,7 @@ let inflight: Promise<Cache> | null = null;
 async function load(): Promise<Cache> {
   const [fxRes, coinValue] = await Promise.all([
     fetch(FX_URL, { signal: AbortSignal.timeout(5_000) }),
-    getCoinStatsCoin("monad"),
+    getCoinStatsCoin("monad", "USD"),
   ]);
   if (!fxRes.ok) throw new Error(`fx ${fxRes.status}`);
   const fxJson = (await fxRes.json()) as { rates?: Record<string, number> };
