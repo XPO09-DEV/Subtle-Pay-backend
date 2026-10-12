@@ -43,6 +43,10 @@ Configure a long random `ADMIN_API_TOKEN` in the server environment. Requests re
 
 CSV is UTF-8 and opens in Excel. Exports are capped, spreadsheet formula injection is neutralized, responses are not cacheable, and sensitive key/password/token fields are excluded.
 
+## Hackathon payment mode
+
+The integration branch deliberately restricts `POST /payments/send` to native MON and rejects the payment flow unless `MONAD_CHAIN_ID=10143` (Monad Testnet). Other assets may be displayed by the UI for information, but they are not payable through this branch. The send form accepts a USD/INR reference value and converts it to a MON amount using the current backend rate; testnet MON is not money and market-price estimates do not give test tokens real-world value. Each newly registered custodial account wallet must be funded with testnet MON for outgoing payments and gas. No mainnet payments should be attempted from this branch.
+
 ## Commercial launch status — important
 
 This backend is **not yet certified production-ready**. The configured chain may still be Monad testnet (chain ID 10143). A production rollout needs a verified mainnet RPC/chain ID, deployed and audited contracts, funded production relayer, key rotation/recovery, monitoring, backups/restore tests, abuse controls and an independent security review.

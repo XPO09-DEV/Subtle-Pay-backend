@@ -45,10 +45,17 @@ function parseAmount(amount: string | number, currency: Currency): number {
 
 export async function sendPayment(
   userId: string,
-  input: { to: string; amount: string | number; amountCurrency: string; note?: string },
+  input: { to: string; amount: string | number; amountCurrency: string; note?: string; asset?: string },
   ip?: string
 ) {
   return exclusive(userId, async () => {
+    const requestedAsset = (input.asset ?? "MON").trim().toUpperCase();
+    if (requestedAsset !== "MON") {
+      throw unprocessable("Hackathon payments are restricted to native MON on Monad Testnet. Other displayed assets are not transferable in this build.", "CHAIN_UNAVAILABLE");
+    }
+    if (config.MONAD_CHAIN_ID !== 10143) {
+      throw unprocessable("Native MON payments are locked to Monad Testnet (chain ID 10143) for this hackathon build.", "CHAIN_UNAVAILABLE");
+    }
     const currency = input.amountCurrency.trim().toUpperCase() as Currency;
     const displayMinorOrMicro = parseAmount(input.amount, currency);
     const rates = await getRates(currency);
@@ -62,7 +69,8 @@ export async function sendPayment(
       throw unprocessable("You cannot pay yourself", "SELF_PAYMENT");
     }
 
-    const stable = Boolean(config.STABLE_TOKEN_ADDRESS);
+    // Keep hackathon settlement native-only even if a token address exists in local configuration.
+    const stable = false;
     const tokenBase = stable ? BigInt(usdMicro) : monWei(usdMicro, rates.tokenUsd);
     if (tokenBase <= 0n) throw badRequest("Amount is too small", "INVALID_AMOUNT");
 
