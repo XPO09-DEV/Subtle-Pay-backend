@@ -39,7 +39,7 @@ export async function getTokenBalance(address: Address): Promise<bigint | null> 
   if (!config.STABLE_TOKEN_ADDRESS) return null;
   try {
     return await publicClient.readContract({
-      address: config.STABLE_TOKEN_ADDRESS,
+      address: config.STABLE_TOKEN_ADDRESS as Address,
       abi: erc20Abi,
       functionName: "balanceOf",
       args: [address],
@@ -58,7 +58,7 @@ function walletClient(privateKeyHex: `0x${string}`) {
 
 export async function sendNative(privateKeyHex: `0x${string}`, to: Address, value: bigint): Promise<Hash> {
   try {
-    return await walletClient(privateKeyHex).sendTransaction({ to, value });
+    return await walletClient(privateKeyHex).sendTransaction({ to, value, chain: null });
   } catch (err) {
     throw serviceUnavailable("Payment could not be submitted to Monad", "CHAIN_UNAVAILABLE", err);
   }
@@ -70,7 +70,7 @@ export async function sendToken(privateKeyHex: `0x${string}`, to: Address, amoun
   }
   try {
     return await walletClient(privateKeyHex).writeContract({
-      address: config.STABLE_TOKEN_ADDRESS,
+      address: config.STABLE_TOKEN_ADDRESS as Address,
       abi: erc20Abi,
       functionName: "transfer",
       args: [to, amount],
@@ -88,7 +88,7 @@ export async function ensureGas(address: Address): Promise<void> {
     const hash = await createWalletClient({
       account: relayer,
       transport: http(config.MONAD_RPC_URL, { timeout: 20_000, retryCount: 0 }),
-    }).sendTransaction({ to: address, value: parseEther("0.02") });
+    }).sendTransaction({ to: address, value: parseEther("0.02"), chain: null });
     await publicClient.waitForTransactionReceipt({ hash, timeout: 20_000 });
   } catch (err) {
     throw serviceUnavailable(
