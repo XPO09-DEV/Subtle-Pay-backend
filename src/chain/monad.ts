@@ -74,6 +74,7 @@ export async function sendToken(privateKeyHex: `0x${string}`, to: Address, amoun
       abi: erc20Abi,
       functionName: "transfer",
       args: [to, amount],
+      chain: null,
     });
   } catch (err) {
     throw serviceUnavailable("Token transfer could not be submitted", "CHAIN_UNAVAILABLE", err);
