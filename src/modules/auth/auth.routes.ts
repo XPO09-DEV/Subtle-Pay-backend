@@ -48,12 +48,13 @@ function cookieValue(req: { headers: { cookie?: string } }, name: string): strin
   return null;
 }
 function refreshCookie(value: string, clear = false): string {
+  const production = config.NODE_ENV === "production";
   const parts = [
     `${REFRESH_COOKIE}=${clear ? "" : encodeURIComponent(value)}`,
     "Path=/auth",
     "HttpOnly",
-    "SameSite=None",
-    "Secure",
+    `SameSite=${production ? "None" : "Lax"}`,
+    ...(production ? ["Secure"] : []),
     "Priority=High",
     `Max-Age=${clear ? 0 : config.REFRESH_TOKEN_TTL_DAYS * 86400}`,
   ];
