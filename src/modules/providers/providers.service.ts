@@ -99,13 +99,13 @@ async function loadAnkrAssets(address: string): Promise<{ assets: AnkrAsset[]; u
   return { assets: [...unique.values()].filter((asset) => Number(asset.balance || 0) > 0), updatedAt: new Date().toISOString(), partial };
 }
 
-export async function getAnkrWalletAssets(rawAddress: string) {
+export async function getAnkrWalletAssets(rawAddress: string, force = false) {
   const address = rawAddress.trim();
   if (!isAddress(address)) throw badRequest("Enter a valid EVM wallet address.");
   const key = address.toLowerCase();
   const cached = walletCache.get(key);
-  if (cached && Date.now() - cached.savedAt < WALLET_CACHE_MS) return { ...cached.value, cached: true };
-  const pending = walletInflight.get(key);
+  if (!force && cached && Date.now() - cached.savedAt < WALLET_CACHE_MS) return { ...cached.value, cached: true };
+  const pending = !force ? walletInflight.get(key) : undefined;
   if (pending) return { ...(await pending), cached: true };
   const request = loadAnkrAssets(address);
   walletInflight.set(key, request);
@@ -153,8 +153,8 @@ async function coinStatsRequest<T>(path: string, params: Record<string, string |
   try { return await request; }
   finally { if (marketInflight.get(cacheKey) === request) marketInflight.delete(cacheKey); }
 }
-export function getCoinStatsCoin(id: string): Promise<unknown> {
-  return coinStatsRequest("coins/" + validateCoinId(id), {}, 60_000);
+export function getCoinStatsCoin(id: string, currency = "USD"): Promise<unknown> {
+  return coinStatsRequest("coins/" + validateCoinId(id), { currency: currency.toUpperCase() }, 60_000);
 }
 export function getCoinStatsCoinList(options: { limit?: number; skip?: number; currency?: string; search?: string; coinIds?: string } = {}): Promise<unknown> {
   return coinStatsRequest("coins", {
@@ -162,9 +162,9 @@ export function getCoinStatsCoinList(options: { limit?: number; skip?: number; c
     search: options.search?.trim() || undefined, coinIds: options.coinIds,
   }, options.search ? 30_000 : 20_000);
 }
-export function getCoinStatsCharts(id: string, period: string): Promise<unknown> {
+export function getCoinStatsCharts(id: string, period: string, currency = "USD"): Promise<unknown> {
   if (!new Set(["24h", "1w", "1m", "3m", "6m", "1y", "all"]).has(period)) throw badRequest("Unsupported chart period.");
   const ttl = period === "24h" ? 60_000 : period === "1w" ? 300_000 : period === "1m" ? 600_000 : period === "3m" ? 900_000 : 1_800_000;
-  return coinStatsRequest("coins/" + validateCoinId(id) + "/charts", { period }, ttl);
+  return coinStatsRequest("coins/" + validateCoinId(id) + "/charts", { period, currency: currency.toUpperCase() }, ttl);
 }
 export function getCoinStatsMarkets(): Promise<unknown> { return coinStatsRequest("markets", {}, 60_000); }
