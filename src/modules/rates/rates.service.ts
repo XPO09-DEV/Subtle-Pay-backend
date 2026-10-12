@@ -1,4 +1,5 @@
 import { badRequest, serviceUnavailable } from "../../lib/errors.js";
+import { getCoinStatsCoin } from "../providers/providers.service.js";
 import {
   assertCurrency,
   exponentOf,
@@ -11,9 +12,8 @@ import {
 } from "../../lib/currency.js";
 
 const FX_URL = "https://open.er-api.com/v6/latest/USD";
-const TOKEN_URL = "https://api.coingecko.com/api/v3/simple/price?ids=monad&vs_currencies=usd";
 const TTL_MS = 60_000;
-const TOKEN_USD_FALLBACK = 0.025;
+const MAX_STALE_MS = 5 * 60_000;
 
 interface Cache {
   tokenUsd: number;
@@ -25,22 +25,16 @@ let cache: Cache | null = null;
 let inflight: Promise<Cache> | null = null;
 
 async function load(): Promise<Cache> {
-  const fxRes = await fetch(FX_URL, { signal: AbortSignal.timeout(5_000) });
+  const [fxRes, coinValue] = await Promise.all([
+    fetch(FX_URL, { signal: AbortSignal.timeout(5_000) }),
+    getCoinStatsCoin("monad"),
+  ]);
   if (!fxRes.ok) throw new Error(`fx ${fxRes.status}`);
   const fxJson = (await fxRes.json()) as { rates?: Record<string, number> };
   if (!fxJson.rates?.INR || !fxJson.rates?.EUR) throw new Error("fx payload missing rates");
-
-  let tokenUsd = TOKEN_USD_FALLBACK;
-  try {
-    const tokenRes = await fetch(TOKEN_URL, { signal: AbortSignal.timeout(5_000) });
-    if (tokenRes.ok) {
-      const tokenJson = (await tokenRes.json()) as { monad?: { usd?: number } };
-      if (tokenJson.monad?.usd && tokenJson.monad.usd > 0) tokenUsd = tokenJson.monad.usd;
-    }
-  } catch {
-    // A missing MON quote must not blank the wallet.
-  }
-
+  const coin = coinValue && typeof coinValue === "object" ? coinValue as Record<string, unknown> : {};
+  const tokenUsd = Number(coin.price ?? coin.priceUsd);
+  if (!Number.isFinite(tokenUsd) || tokenUsd <= 0) throw new Error("CoinStats did not return a valid MON price");
   return { tokenUsd, fx: { USD: 1, ...fxJson.rates }, updatedAt: Date.now() };
 }
 
@@ -59,8 +53,8 @@ async function current(): Promise<Cache> {
   try {
     return await inflight;
   } catch (err) {
-    if (cache) return cache;
-    throw serviceUnavailable("Exchange rates are unavailable", "RATES_UNAVAILABLE", err);
+    if (cache && Date.now() - cache.updatedAt <= MAX_STALE_MS) return cache;
+    throw serviceUnavailable("Live exchange rates or the MON market price are unavailable; payment quotes are paused rather than using a demo price.", "RATES_UNAVAILABLE", err);
   }
 }
 
