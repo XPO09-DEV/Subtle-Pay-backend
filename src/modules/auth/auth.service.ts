@@ -127,18 +127,28 @@ export async function changePassword(
 }
 
 export function getMe(userId: string) {
-  const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at FROM users WHERE id = ?").get(userId) as
-    | { id: string; currency: string; display_name: string | null; region: string | null; region_consent_at: number | null }
+  const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at, created_at FROM users WHERE id = ?").get(userId) as
+    | { id: string; currency: string; display_name: string | null; region: string | null; region_consent_at: number | null; created_at: number }
     | undefined;
   if (!user) throw invalidCredentials();
   const alias = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as
     | { alias: string }
     | undefined;
+  const wallet = db.prepare("SELECT address, created_at FROM wallets WHERE user_id = ?").get(userId) as
+    | { address: string; created_at: number }
+    | undefined;
+  const lastLogin = db.prepare(
+    "SELECT MAX(ts) AS last_login_at FROM audit_log WHERE actor = ? AND action = 'auth.login'"
+  ).get(userId) as { last_login_at: number | null } | undefined;
   return {
     accountId: user.id,
     alias: alias?.alias ?? null,
     displayName: user.display_name,
     currency: user.currency,
+    accountCreatedAt: user.created_at,
+    lastLoginAt: lastLogin?.last_login_at ?? null,
+    walletAddress: wallet?.address ?? null,
+    walletCreatedAt: wallet?.created_at ?? null,
     region: user.region_consent_at ? user.region : null,
     regionConsentAt: user.region_consent_at,
   };
