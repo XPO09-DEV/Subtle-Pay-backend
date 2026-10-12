@@ -2,7 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getAnkrWalletAssets, getCoinStatsCharts, getCoinStatsCoin, getCoinStatsCoinList, getCoinStatsMarkets } from "./providers.service.js";
 
-const addressQuery = z.object({ address: z.string().trim().min(42).max(42) });
+const addressQuery = z.object({
+  address: z.string().trim().min(42).max(42),
+  refresh: z.coerce.boolean().default(false),
+});
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   skip: z.coerce.number().int().min(0).max(100_000).default(0),
@@ -10,7 +13,10 @@ const listQuery = z.object({
   coinIds: z.string().trim().max(2_000).optional(),
 });
 const searchQuery = z.object({ q: z.string().trim().min(2).max(80), currency: z.string().trim().regex(/^[A-Za-z]{3}$/).default("USD") });
-const chartQuery = z.object({ period: z.enum(["24h", "1w", "1m", "3m", "6m", "1y", "all"]).default("24h") });
+const chartQuery = z.object({
+  period: z.enum(["24h", "1w", "1m", "3m", "6m", "1y", "all"]).default("24h"),
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/).default("USD"),
+});
 
 function filterSearchPayload(payload: unknown, query: string): unknown {
   if (!payload || typeof payload !== "object") return payload;
@@ -34,7 +40,7 @@ function filterSearchPayload(payload: unknown, query: string): unknown {
 export async function providerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/wallet/assets", { config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (req) => {
     const query = addressQuery.parse(req.query);
-    const value = await getAnkrWalletAssets(query.address);
+    const value = await getAnkrWalletAssets(query.address, query.refresh);
     return { assets: value.assets, updatedAt: value.updatedAt, partial: value.partial, cached: value.cached };
   });
   app.get("/market/search", { config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (req) => {
@@ -46,11 +52,12 @@ export async function providerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/market/coins/:coinId/charts", { config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (req) => {
     const params = req.params as { coinId: string };
     const query = chartQuery.parse(req.query);
-    return getCoinStatsCharts(params.coinId, query.period);
+    return getCoinStatsCharts(params.coinId, query.period, query.currency);
   });
   app.get("/market/coins/:coinId", { config: { rateLimit: { max: 45, timeWindow: 60_000 } } }, async (req) => {
     const params = req.params as { coinId: string };
-    return getCoinStatsCoin(params.coinId);
+    const query = z.object({ currency: z.string().trim().regex(/^[A-Za-z]{3}$/).default("USD") }).parse(req.query);
+    return getCoinStatsCoin(params.coinId, query.currency);
   });
   app.get("/market/markets", { config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async () => getCoinStatsMarkets());
 }
