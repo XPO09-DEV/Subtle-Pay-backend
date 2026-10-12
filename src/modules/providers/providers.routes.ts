@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { badRequest, serviceUnavailable } from "../../lib/errors.js";
 import { z } from "zod";
 import { getAnkrWalletAssets, getCoinStatsCharts, getCoinStatsCoin, getCoinStatsCoinList, getCoinStatsMarkets } from "./providers.service.js";
 
