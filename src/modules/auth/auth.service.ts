@@ -1,6 +1,6 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { db, withTransaction, type UserRow } from "../../db.js";
-import { generateAccountId, isValidAccountId, normalizeAccountId } from "../../lib/crypto.js";
+import { generateAccountId, isValidAccountId, normalizeAccountId, newId, sha256Hex } from "../../lib/crypto.js";
 import {
   assertNotLocked,
   hashPassword,
@@ -16,6 +16,32 @@ import { encryptSecret, zeroize } from "../../lib/kms.js";
 import { badRequest, invalidCredentials } from "../../lib/errors.js";
 import { assertCurrency, type Currency } from "../../lib/currency.js";
 import { audit } from "../../lib/audit.js";
+
+
+/** Store an authentication outcome without retaining the submitted account identifier or any credential. */
+function recordLoginEvent(
+  userId: string | null,
+  attemptedAccountId: string,
+  success: boolean,
+  reason: "invalid_account_id" | "unknown_account" | "bad_password" | "locked" | null,
+  meta: SessionMeta
+): void {
+  const normalized = normalizeAccountId(attemptedAccountId);
+  db.prepare(
+    `INSERT INTO login_events
+       (id, user_id, account_id_hash, outcome, reason, ip, user_agent, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    newId(),
+    userId,
+    sha256Hex(normalized || "(empty)"),
+    success ? "success" : "failure",
+    reason,
+    meta.ip?.slice(0, 128) ?? null,
+    meta.userAgent?.slice(0, 512) ?? null,
+    Date.now()
+  );
+}
 
 /** One custodial wallet per account. The raw key is wiped before this returns. */
 function createWallet(userId: string): string {
@@ -64,20 +90,32 @@ export async function login(accountIdRaw: string, password: string, meta: Sessio
   const accountId = normalizeAccountId(accountIdRaw);
   if (!isValidAccountId(accountId)) {
     await verifyPasswordDummy(password);
+    recordLoginEvent(null, accountId, false, "invalid_account_id", meta);
+    audit(null, "auth.login_failed", { reason: "invalid_account_id" }, meta.ip);
     throw invalidCredentials();
   }
 
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(accountId) as UserRow | undefined;
   if (!user) {
     await verifyPasswordDummy(password);
+    recordLoginEvent(null, accountId, false, "unknown_account", meta);
+    audit(null, "auth.login_failed", { reason: "unknown_account" }, meta.ip);
     throw invalidCredentials();
   }
 
-  assertNotLocked(user.locked_until);
+  try {
+    assertNotLocked(user.locked_until);
+  } catch (error) {
+    recordLoginEvent(user.id, accountId, false, "locked", meta);
+    audit(user.id, "auth.login_failed", { reason: "locked" }, meta.ip);
+    throw error;
+  }
+
   const ok = await verifyPassword(user.password_hash, password);
   if (!ok) {
     const failure = recordLoginFailure(user.id);
-    audit(user.id, "auth.login_failed", { attempts: failure.attempts }, meta.ip);
+    recordLoginEvent(user.id, accountId, false, "bad_password", meta);
+    audit(user.id, "auth.login_failed", { attempts: failure.attempts, reason: "bad_password" }, meta.ip);
     if (failure.lockedUntil) assertNotLocked(failure.lockedUntil);
     throw invalidCredentials();
   }
@@ -93,6 +131,7 @@ export async function login(accountIdRaw: string, password: string, meta: Sessio
   }
 
   const session = await issueSession(user.id, meta);
+  recordLoginEvent(user.id, accountId, true, null, meta);
   audit(user.id, "auth.login", undefined, meta.ip);
   return {
     token: session.accessToken,

@@ -112,7 +112,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/me", { preHandler: requireAuth }, async (req) => getMe(currentUser(req).id));
 
-  app.get("/home", { preHandler: requireAuth }, async (req) => getHome(currentUser(req).id));
+  app.get("/home", { preHandler: requireAuth }, async (req) => {
+    const query = z.object({ refresh: z.enum(["true", "false"]).optional() }).parse(req.query);
+    return getHome(currentUser(req).id, query.refresh === "true");
+  });
 
   app.put("/me/currency", { preHandler: requireAuth }, async (req) => {
     const body = currencyBody.parse(req.body);

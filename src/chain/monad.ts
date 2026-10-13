@@ -35,6 +35,20 @@ export async function getNativeBalance(address: Address): Promise<bigint> {
   }
 }
 
+
+/** Estimate a conservative native-transfer gas reservation (120% of gas estimate). */
+export async function estimateNativeTransferFee(from: Address, to: Address, value: bigint): Promise<bigint> {
+  try {
+    const [gas, gasPrice] = await Promise.all([
+      publicClient.estimateGas({ account: from, to, value }),
+      publicClient.getGasPrice(),
+    ]);
+    return (gas * gasPrice * 120n + 99n) / 100n;
+  } catch (err) {
+    throw serviceUnavailable("Could not estimate Monad transaction fees", "CHAIN_UNAVAILABLE", err);
+  }
+}
+
 export async function getTokenBalance(address: Address): Promise<bigint | null> {
   if (!config.STABLE_TOKEN_ADDRESS) return null;
   try {

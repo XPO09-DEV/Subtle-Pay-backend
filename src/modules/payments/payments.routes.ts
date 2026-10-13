@@ -23,5 +23,13 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     );
   });
 
-  app.get("/payments", { preHandler: requireAuth }, async (req) => listPayments(currentUser(req).id));
+  app.get("/payments", { preHandler: requireAuth }, async (req) => {
+    const query = z.object({
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+      offset: z.coerce.number().int().min(0).max(100_000).default(0),
+      status: z.enum(["pending", "submitted", "confirmed", "failed"]).optional(),
+      direction: z.enum(["in", "out"]).optional(),
+    }).parse(req.query);
+    return listPayments(currentUser(req).id, query);
+  });
 }

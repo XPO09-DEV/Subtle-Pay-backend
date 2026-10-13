@@ -11,6 +11,7 @@ import { authRoutes } from "./modules/auth/auth.routes.js";
 import { aliasRoutes } from "./modules/alias/alias.routes.js";
 import { ratesRoutes } from "./modules/rates/rates.routes.js";
 import { walletRoutes } from "./modules/wallet/wallet.routes.js";
+import { qrRoutes } from "./modules/qr/qr.routes.js";
 import { paymentRoutes } from "./modules/payments/payments.routes.js";
 import { withdrawRoutes } from "./modules/withdraw/withdraw.routes.js";
 import { contactRoutes } from "./modules/contacts/contacts.routes.js";
@@ -20,6 +21,7 @@ import { bridgeRoutes } from "./modules/bridge/bridge.routes.js";
 import { assetRoutes } from "./modules/assets/assets.routes.js";
 import { providerRoutes } from "./modules/providers/providers.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
+import { notificationRoutes } from "./modules/notifications/notifications.routes.js";
 
 const app = Fastify({
   logger: {
@@ -48,6 +50,7 @@ await app.register(authRoutes);
 await app.register(aliasRoutes);
 await app.register(ratesRoutes);
 await app.register(walletRoutes);
+await app.register(qrRoutes);
 await app.register(paymentRoutes);
 await app.register(withdrawRoutes);
 await app.register(contactRoutes);
@@ -57,6 +60,7 @@ await app.register(bridgeRoutes);
 await app.register(assetRoutes);
 await app.register(providerRoutes);
 await app.register(adminRoutes);
+await app.register(notificationRoutes);
 
 const hashMs = await initPassword();
 kmsSelfTest();

@@ -1,8 +1,9 @@
-import { isAddress } from "viem";
+import { isAddress, type Hash } from "viem";
 import { config } from "../../config.js";
 import {
   formatMon,
   formatToken,
+  estimateNativeTransferFee,
   getNativeBalance,
   getTokenBalance,
   sendNative,
@@ -26,8 +27,10 @@ import { withDecryptedSecret } from "../../lib/kms.js";
 import { audit } from "../../lib/audit.js";
 import { normalizeAlias } from "../alias/alias.service.js";
 import { getRates } from "../rates/rates.service.js";
-import { getWalletRow } from "../wallet/wallet.service.js";
+import { getWalletRow, invalidateWalletViewCache } from "../wallet/wallet.service.js";
+import { getActiveHoldTotalWei } from "./holds.service.js";
 import { findContact } from "../contacts/contacts.service.js";
+import { insertPaymentNotification } from "../notifications/notifications.service.js";
 
 const locks = new Map<string, Promise<unknown>>();
 
@@ -79,12 +82,33 @@ export async function sendPayment(
 
     const txId = newId();
     const now = Date.now();
-    db.prepare(
-      `INSERT INTO transactions
-         (id, from_user, to_user, from_address, to_address, amount_micro, display_currency, fx_rate, status, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-    ).run(txId, userId, dest.userId, from.address, dest.address, usdMicro, currency, rates.usdLocal, input.note ?? null, now, now);
+    const estimatedFeeWei = stable
+      ? 0n
+      : await estimateNativeTransferFee(
+          from.address as `0x${string}`,
+          dest.address as `0x${string}`,
+          tokenBase
+        );
+    const reservedWei = tokenBase + estimatedFeeWei;
 
+    // Recheck all active holds while holding SQLite's IMMEDIATE write lock, then
+    // reserve this amount atomically with the transaction record.
+    withTransaction(() => {
+      const activeHolds = getActiveHoldTotalWei(userId);
+      if (!stable && balance < activeHolds + reservedWei) throw insufficientFunds();
+      db.prepare(
+        `INSERT INTO transactions
+           (id, from_user, to_user, from_address, to_address, amount_micro, display_currency, fx_rate, status, note, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+      ).run(txId, userId, dest.userId, from.address, dest.address, usdMicro, currency, rates.usdLocal, input.note ?? null, now, now);
+      db.prepare(
+        `INSERT INTO fund_holds (id, transaction_id, user_id, amount_wei, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', ?, ?)`
+      ).run(txId, txId, userId, reservedWei.toString(), now, now);
+    });
+    invalidateWalletViewCache(userId);
+
+    let submittedHash: Hash | null = null;
     try {
       const hash = await withDecryptedSecret(from.enc_priv_key, { userId, address: from.address }, async (secret) => {
         const key = `0x${secret.toString("hex")}` as `0x${string}`;
@@ -92,11 +116,36 @@ export async function sendPayment(
           ? sendToken(key, dest.address as `0x${string}`, tokenBase)
           : sendNative(key, dest.address as `0x${string}`, tokenBase);
       });
+
+      submittedHash = hash;
+
+      // Persist the hash immediately after submission. A timeout waiting for a
+      // receipt must not erase a potentially live transaction or its reservation.
+      withTransaction(() => {
+        db.prepare(
+          `UPDATE transactions SET status = 'submitted', tx_hash = ?, updated_at = ? WHERE id = ?`
+        ).run(hash, Date.now(), txId);
+        insertPaymentNotification(userId, txId, "payment_submitted");
+        if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, "payment_submitted");
+      });
+      invalidateWalletViewCache(userId);
+
       const status = await waitConfirmed(hash);
-      const confirmedAt = status === "confirmed" ? Date.now() : null;
-      db.prepare(
-        `UPDATE transactions SET status = ?, tx_hash = ?, updated_at = ?, confirmed_at = ? WHERE id = ?`
-      ).run(status, hash, Date.now(), confirmedAt, txId);
+      const finishedAt = Date.now();
+      withTransaction(() => {
+        db.prepare(
+          `UPDATE transactions SET status = ?, tx_hash = ?, updated_at = ?, confirmed_at = ? WHERE id = ?`
+        ).run(status, hash, finishedAt, status === "confirmed" ? finishedAt : null, txId);
+        db.prepare(
+          `UPDATE fund_holds SET status = ?, updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
+        ).run(status === "confirmed" ? "settled" : status === "failed" ? "released" : "active", finishedAt, status === "submitted" ? null : finishedAt, txId);
+        if (status === "confirmed" || status === "failed") {
+          const notificationType = status === "confirmed" ? "payment_confirmed" : "payment_failed";
+          insertPaymentNotification(userId, txId, notificationType);
+          if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, notificationType);
+        }
+      });
+      invalidateWalletViewCache(userId);
       audit(userId, "payment.send", { txId, status, usdMicro }, ip);
       return {
         txId,
@@ -106,9 +155,28 @@ export async function sendPayment(
         txHash: hash,
       };
     } catch (err) {
-      db.prepare(
-        `UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?`
-      ).run("chain", Date.now(), txId);
+      const failedAt = Date.now();
+      withTransaction(() => {
+        if (submittedHash) {
+          // The RPC accepted a transaction. If persisting the receipt/status failed,
+          // keep it submitted and retain the hold until a later receipt reconciliation.
+          db.prepare(
+            `UPDATE transactions SET status = 'submitted', tx_hash = COALESCE(tx_hash, ?), failure_reason = NULL, updated_at = ? WHERE id = ? AND status IN ('pending','submitted')`
+          ).run(submittedHash, failedAt, txId);
+          insertPaymentNotification(userId, txId, "payment_submitted");
+          if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, "payment_submitted");
+        } else {
+          db.prepare(
+            `UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ? AND status = 'pending'`
+          ).run("chain", failedAt, txId);
+          db.prepare(
+            `UPDATE fund_holds SET status = 'released', updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
+          ).run(failedAt, failedAt, txId);
+          insertPaymentNotification(userId, txId, "payment_failed");
+          if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, "payment_failed");
+        }
+      });
+      invalidateWalletViewCache(userId);
       throw err;
     }
   });
@@ -152,28 +220,49 @@ async function resolveDestination(to: string, ownerId?: string): Promise<{ addre
   return { address: row.address, userId: row.user_id };
 }
 
-export function listPayments(userId: string) {
-  const user = db.prepare("SELECT currency FROM users WHERE id = ?").get(userId) as { currency: Currency };
-  const rows = db
-    .prepare(
-      `SELECT t.*,
-              fa.alias AS from_alias,
-              ta.alias AS to_alias
-         FROM transactions t
-         LEFT JOIN aliases fa ON fa.user_id = t.from_user
-         LEFT JOIN aliases ta ON ta.user_id = t.to_user
-        WHERE t.from_user = ? OR t.to_user = ?
-        ORDER BY t.created_at DESC
-        LIMIT 50`
-    )
-    .all(userId, userId) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
+export interface PaymentListOptions {
+  limit?: number;
+  offset?: number;
+  status?: "pending" | "submitted" | "confirmed" | "failed";
+  direction?: "in" | "out";
+}
 
-  return rows.map((row) => {
+export function listPayments(userId: string, options: PaymentListOptions = {}) {
+  const limit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
+  const offset = Math.min(100_000, Math.max(0, Math.trunc(options.offset ?? 0)));
+  const where = ["(t.from_user = ? OR t.to_user = ?)"];
+  const params: Array<string | number> = [userId, userId];
+  if (options.status) {
+    where.push("t.status = ?");
+    params.push(options.status);
+  }
+  if (options.direction === "out") where.push("t.from_user = ?");
+  if (options.direction === "in") where.push("t.to_user = ?");
+  if (options.direction) params.push(userId);
+
+  const whereSql = where.join(" AND ");
+  const count = db.prepare(
+    `SELECT COUNT(*) AS total FROM transactions t WHERE ${whereSql}`
+  ).get(...params) as { total: number };
+  const rows = db.prepare(
+    `SELECT t.*,
+            fa.alias AS from_alias,
+            ta.alias AS to_alias
+       FROM transactions t
+       LEFT JOIN aliases fa ON fa.user_id = t.from_user
+       LEFT JOIN aliases ta ON ta.user_id = t.to_user
+      WHERE ${whereSql}
+      ORDER BY t.created_at DESC, t.id DESC
+      LIMIT ? OFFSET ?`
+  ).all(...params, limit + 1, offset) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
+
+  const hasMore = rows.length > limit;
+  const items = rows.slice(0, limit).map((row) => {
     const outgoing = row.from_user === userId;
     const localMinor = usdMicroToLocalMinor(row.amount_micro, row.fx_rate, row.display_currency as Currency);
     return {
       id: row.id,
-      direction: outgoing ? "out" : "in",
+      direction: outgoing ? "out" as const : "in" as const,
       counterparty: outgoing ? row.to_alias ?? row.to_address : row.from_alias ?? row.from_address,
       usdValue: microToDecimalString(row.amount_micro),
       localValue: minorToDecimalString(localMinor, row.display_currency as Currency),
@@ -183,6 +272,13 @@ export function listPayments(userId: string) {
       createdAt: new Date(row.created_at).toISOString(),
     };
   });
+  return {
+    items,
+    limit,
+    offset,
+    total: count.total,
+    nextOffset: hasMore ? offset + limit : null,
+  };
 }
 
 export { withTransaction };
