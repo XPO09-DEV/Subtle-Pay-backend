@@ -42,39 +42,7 @@ $bytes = New-Object byte[] 32
 $rng.GetBytes($bytes)
 $token = [BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
 $rng.Dispose()
-(Get-Content .env) -replace '^ADMIN_API_TOKEN=.*
-
-CSV is UTF-8 and opens in Excel. Exports are capped, spreadsheet formula injection is neutralized, responses are not cacheable, and sensitive key/password/token fields are excluded.
-
-## Hackathon payment mode
-
-The integration branch deliberately restricts `POST /payments/send` to native MON and rejects the payment flow unless `MONAD_CHAIN_ID=10143` (Monad Testnet). Other assets may be displayed by the UI for information, but they are not payable through this branch. The send form accepts a USD/INR reference value and converts it to a MON amount using the current backend rate; testnet MON is not money and market-price estimates do not give test tokens real-world value. Each newly registered custodial account wallet must be funded with testnet MON for outgoing payments and gas. No mainnet payments should be attempted from this branch.
-
-## Commercial launch status — important
-
-This backend is **not yet certified production-ready**. The configured chain may still be Monad testnet (chain ID 10143). A production rollout needs a verified mainnet RPC/chain ID, deployed and audited contracts, funded production relayer, key rotation/recovery, monitoring, backups/restore tests, abuse controls and an independent security review.
-
-The fiat-withdrawal route is disabled until a real payout provider is integrated. Cross-chain bridging is disabled and no bridge transaction is implemented. The payment service supports only its configured Monad settlement path. Review applicable KYC/AML/sanctions, consumer protection, custody, privacy, retention, accounting and tax requirements with qualified professionals before accepting commercial users.
-
-## Main routes
-
-| Route | Purpose |
-|---|---|
-| `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout` | Accounts and sessions |
-| `GET /me`, `GET /home`, `PUT /me/profile` | Authenticated identity/profile |
-| `GET /wallet` | Custodial Monad wallet summary |
-| `POST /payments/send`, `GET /payments` | Payments and history |
-| `GET /api/wallet/assets` | Rate-limited Ankr balance proxy |
-| `PUT /me/profile` | Profile name and explicit region-sharing consent |
-| `GET /market/*` | Cached CoinStats market proxy |
-| `GET /me/sessions`, `GET /me/login-events` | Active sessions and personal login history |
-| `PUT /auth/mpin`, `POST /auth/payment-authorization` | MPIN setup and one-time payment approval |
-| `GET /merchant/profile`, `POST /merchant/enable`, `POST /merchant/autopay-applications` | Merchant profile and Autopay application |
-| `GET /admin/overview`, `GET /admin/users`, `GET /admin/transactions`, `GET /admin/login-events` | Admin monitoring of users, balances, payments and logins |
-| `GET /admin/export.csv` | Admin audit/data exports |
-
-SQLite files live under `data/`. Add new checksummed migrations; never edit applied migrations.
-, ("ADMIN_API_TOKEN=" + $token) | Set-Content .env
+(Get-Content .env) -replace '^ADMIN_API_TOKEN=.*$', ("ADMIN_API_TOKEN=" + $token) | Set-Content .env
 ```
 
 - `GET /admin/overview` — account/wallet/payment counts, confirmed and unsettled payments, recent logins and opted-in regions.
@@ -115,6 +83,10 @@ The fiat-withdrawal route is disabled until a real payout provider is integrated
 | `GET /api/wallet/assets` | Rate-limited Ankr balance proxy |
 | `PUT /me/profile` | Profile name and explicit region-sharing consent |
 | `GET /market/*` | Cached CoinStats market proxy |
-| `GET /admin/overview`, `GET /admin/export.csv` | Admin view and exports |
+| `GET /me/sessions`, `GET /me/login-events` | Active sessions and personal login history |
+| `PUT /auth/mpin`, `POST /auth/payment-authorization` | MPIN setup and one-time payment approval |
+| `GET /merchant/profile`, `POST /merchant/enable`, `POST /merchant/autopay-applications` | Merchant profile and Autopay application |
+| `GET /admin/overview`, `GET /admin/users`, `GET /admin/transactions`, `GET /admin/login-events` | Admin monitoring of users, balances, payments and logins |
+| `GET /admin/export.csv` | Admin audit/data exports |
 
 SQLite files live under `data/`. Add new checksummed migrations; never edit applied migrations.
