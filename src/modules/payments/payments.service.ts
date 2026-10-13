@@ -160,47 +160,33 @@ export function listPayments(userId: string, options: {
   const where = ["(t.from_user = ? OR t.to_user = ?)"];
   const args: Array<string | number> = [userId, userId];
   if (options.q?.trim()) {
-    const needle = `%${options.q.trim().toLowerCase().replace(/[\\%_]/g, "\\export function listPayments(userId: string, options: { limit?: number; before?: number; beforeId?: string } = {}) {
-  const user = db.prepare("SELECT currency FROM users WHERE id = ?").get(userId) as { currency: Currency };
-  const limit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
-  const before = options.before, beforeId = options.beforeId;
-  const rows = db.prepare(`SELECT t.*, fa.alias AS from_alias, ta.alias AS to_alias
-    FROM transactions t LEFT JOIN aliases fa ON fa.user_id = t.from_user LEFT JOIN aliases ta ON ta.user_id = t.to_user
-    WHERE (t.from_user = ? OR t.to_user = ?) AND (? IS NULL OR t.created_at < ? OR (t.created_at = ? AND ? IS NOT NULL AND t.id < ?))
-    ORDER BY t.created_at DESC, t.id DESC LIMIT ?`)
-    .all(userId, userId, before ?? null, before ?? null, before ?? null, beforeId ?? null, beforeId ?? "", limit) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
-  return rows.map((row) => {
-    const outgoing = row.from_user === userId;
-    const localMinor = usdMicroToLocalMinor(row.amount_micro, row.fx_rate, row.display_currency as Currency);
-    return {
-      id: row.id, direction: outgoing ? "out" : "in",
-      counterparty: outgoing ? row.to_alias ?? row.to_address : row.from_alias ?? row.from_address,
-      usdValue: microToDecimalString(row.amount_micro), localValue: minorToDecimalString(localMinor, row.display_currency as Currency),
-      displayCurrency: row.display_currency, status: row.status, txHash: row.tx_hash,
-      confirmedAt: row.confirmed_at, updatedAt: row.updated_at, createdAt: new Date(row.created_at).toISOString(),
-    };
-  });
-}")}%`;
-    where.push(`(
-      lower(t.id) LIKE ? ESCAPE '\\' OR lower(COALESCE(t.tx_hash, '')) LIKE ? ESCAPE '\\'
-      OR lower(COALESCE(t.note, '')) LIKE ? ESCAPE '\\'
-      OR lower(COALESCE(fa.alias, '')) LIKE ? ESCAPE '\\'
-      OR lower(COALESCE(ta.alias, '')) LIKE ? ESCAPE '\\'
-      OR lower(t.from_address) LIKE ? ESCAPE '\\' OR lower(t.to_address) LIKE ? ESCAPE '\\'
-    )`);
+    // Search is parameterized; SQL wildcard characters may broaden a search but cannot alter the query.
+    const needle = "%" + options.q.trim().toLowerCase() + "%";
+    where.push(\`(
+      lower(t.id) LIKE ? OR lower(COALESCE(t.tx_hash, '')) LIKE ?
+      OR lower(COALESCE(t.note, '')) LIKE ?
+      OR lower(COALESCE(fa.alias, '')) LIKE ?
+      OR lower(COALESCE(ta.alias, '')) LIKE ?
+      OR lower(t.from_address) LIKE ? OR lower(t.to_address) LIKE ?
+    )\`);
     args.push(needle, needle, needle, needle, needle, needle, needle);
   }
   if (options.status) { where.push("t.status = ?"); args.push(options.status); }
   if (options.direction === "out") { where.push("t.from_user = ?"); args.push(userId); }
   if (options.direction === "in") { where.push("t.to_user = ?"); args.push(userId); }
   if (options.before !== undefined) {
-    if (options.beforeId) { where.push("(t.created_at < ? OR (t.created_at = ? AND t.id < ?))"); args.push(options.before, options.before, options.beforeId); }
-    else { where.push("t.created_at < ?"); args.push(options.before); }
+    if (options.beforeId) {
+      where.push("(t.created_at < ? OR (t.created_at = ? AND t.id < ?))");
+      args.push(options.before, options.before, options.beforeId);
+    } else {
+      where.push("t.created_at < ?");
+      args.push(options.before);
+    }
   }
-  const rows = db.prepare(`SELECT t.*, fa.alias AS from_alias, ta.alias AS to_alias
+  const rows = db.prepare(\`SELECT t.*, fa.alias AS from_alias, ta.alias AS to_alias
     FROM transactions t LEFT JOIN aliases fa ON fa.user_id = t.from_user LEFT JOIN aliases ta ON ta.user_id = t.to_user
-    WHERE ${where.join(" AND ")}
-    ORDER BY t.created_at DESC, t.id DESC LIMIT ?`)
+    WHERE \${where.join(" AND ")}
+    ORDER BY t.created_at DESC, t.id DESC LIMIT ?\`)
     .all(...args, limit) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
   return rows.map((row) => {
     const outgoing = row.from_user === userId;
