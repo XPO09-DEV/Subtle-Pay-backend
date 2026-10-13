@@ -31,12 +31,13 @@ export function claimAlias(userId: string, raw: string, ip?: string): { alias: s
     | { alias: string }
     | undefined;
   const now = Date.now();
-  if (mine) {
-    db.prepare("UPDATE aliases SET alias = ?, created_at = ? WHERE user_id = ?").run(alias, now, userId);
-  } else {
+  if (mine && mine.alias !== alias) {
+    throw conflict("Your Subtle Pay handle is permanent once assigned. Create a new account if you need a different handle.", "ALIAS_IMMUTABLE");
+  }
+  if (!mine) {
     db.prepare("INSERT INTO aliases (alias, user_id, created_at) VALUES (?, ?, ?)").run(alias, userId, now);
   }
-  audit(userId, "alias.claim", { alias }, ip);
+  audit(userId, mine ? "alias.claim.reused" : "alias.claim", { alias }, ip);
   return { alias };
 }
 
