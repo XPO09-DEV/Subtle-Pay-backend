@@ -162,13 +162,13 @@ export function listPayments(userId: string, options: {
   if (options.q?.trim()) {
     // Search is parameterized; SQL wildcard characters may broaden a search but cannot alter the query.
     const needle = "%" + options.q.trim().toLowerCase() + "%";
-    where.push(\`(
+    where.push(`(
       lower(t.id) LIKE ? OR lower(COALESCE(t.tx_hash, '')) LIKE ?
       OR lower(COALESCE(t.note, '')) LIKE ?
       OR lower(COALESCE(fa.alias, '')) LIKE ?
       OR lower(COALESCE(ta.alias, '')) LIKE ?
       OR lower(t.from_address) LIKE ? OR lower(t.to_address) LIKE ?
-    )\`);
+    )`);
     args.push(needle, needle, needle, needle, needle, needle, needle);
   }
   if (options.status) { where.push("t.status = ?"); args.push(options.status); }
@@ -183,10 +183,10 @@ export function listPayments(userId: string, options: {
       args.push(options.before);
     }
   }
-  const rows = db.prepare(\`SELECT t.*, fa.alias AS from_alias, ta.alias AS to_alias
+  const rows = db.prepare(`SELECT t.*, fa.alias AS from_alias, ta.alias AS to_alias
     FROM transactions t LEFT JOIN aliases fa ON fa.user_id = t.from_user LEFT JOIN aliases ta ON ta.user_id = t.to_user
-    WHERE \${where.join(" AND ")}
-    ORDER BY t.created_at DESC, t.id DESC LIMIT ?\`)
+    WHERE ${where.join(" AND ")}
+    ORDER BY t.created_at DESC, t.id DESC LIMIT ?`)
     .all(...args, limit) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
   return rows.map((row) => {
     const outgoing = row.from_user === userId;
