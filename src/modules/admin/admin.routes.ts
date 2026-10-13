@@ -4,6 +4,7 @@ import { z } from "zod";
 import { config } from "../../config.js";
 import { db } from "../../db.js";
 import { audit } from "../../lib/audit.js";
+import { conflict, notFound } from "../../lib/errors.js";
 import { formatEther, type Address } from "viem";
 import { getNativeBalance } from "../../chain/monad.js";
 
@@ -27,6 +28,7 @@ function rowsFor(dataset: z.infer<typeof datasetSchema>): Record<string, unknown
   if (dataset === "users") return db.prepare(`
     SELECT u.id AS account_id, COALESCE(u.display_name, a.alias, '') AS display_name,
       a.alias AS handle, w.address AS wallet_address, u.currency AS preferred_currency,
+      ${timeSql("u.deleted_at")} AS account_deleted_at,
       ${timeSql("u.created_at")} AS account_created_at, ${timeSql("w.created_at")} AS wallet_created_at,
       ${timeSql("COALESCE((SELECT MAX(event_at) FROM login_events WHERE account_id = u.id AND success = 1 AND reason = 'success'), (SELECT MAX(ts) FROM audit_log WHERE actor = u.id AND action = 'auth.login'))")} AS last_login_at,
       (SELECT COUNT(*) FROM transactions t WHERE t.from_user=u.id OR t.to_user=u.id) AS transaction_count,
@@ -48,7 +50,7 @@ function rowsFor(dataset: z.infer<typeof datasetSchema>): Record<string, unknown
   `).all() as Record<string, unknown>[];
   if (dataset === "sessions") return db.prepare(`
     SELECT le.account_id, COALESCE(u.display_name, a.alias, '') AS display_name, a.alias, le.success, le.reason,
-      ${timeSql("le.event_at")} AS event_at
+      le.ip, le.user_agent, le.request_id, ${timeSql("le.event_at")} AS event_at
     FROM login_events le LEFT JOIN users u ON u.id=le.account_id LEFT JOIN aliases a ON a.user_id=le.account_id
     ORDER BY le.event_at DESC LIMIT ${EXPORT_ROW_LIMIT}
   `).all() as Record<string, unknown>[];
@@ -154,8 +156,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({ decision: z.enum(["approved", "rejected"]), note: z.string().trim().max(500).optional() }).parse(req.body);
     const application = db.prepare("SELECT id, user_id AS userId, status FROM merchant_autopay_applications WHERE id = ?")
       .get(params.id) as { id: string; userId: string; status: string } | undefined;
-    if (!application) throw new Error("Autopay application not found");
-    if (application.status !== "pending") throw new Error("This application has already been reviewed");
+    if (!application) throw notFound("Autopay application not found");
+    if (application.status !== "pending") throw conflict("This application has already been reviewed.");
     const now = Date.now();
     db.prepare("UPDATE merchant_autopay_applications SET status = ?, reviewed_at = ?, reviewed_by = 'admin', review_note = ? WHERE id = ? AND status = 'pending'")
       .run(body.decision, now, body.note ?? null, application.id);
@@ -165,5 +167,26 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
     audit("admin", "admin.merchant_application.reviewed", { applicationId: application.id, decision: body.decision }, req.ip);
     return { ok: true, applicationId: application.id, status: body.decision, verifiedBadge: body.decision === "approved" };
+  });
+  app.get("/admin/login-events", { preHandler: requireAdmin, config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (req) => {
+    const query = z.object({
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+      before: z.coerce.number().int().positive().optional(),
+      outcome: z.enum(["success", "failure", "all"]).default("all"),
+    }).parse(req.query);
+    const where = ["(? IS NULL OR le.event_at < ?)"];
+    const params: Array<number | null | string> = [query.before ?? null, query.before ?? null];
+    if (query.outcome === "success") where.push("le.success = 1");
+    if (query.outcome === "failure") where.push("le.success = 0");
+    const rows = db.prepare(`SELECT le.id, le.account_id AS accountId,
+      COALESCE(u.display_name, a.alias, '') AS displayName, a.alias,
+      le.success, le.reason, le.ip, le.user_agent AS userAgent, le.request_id AS requestId,
+      le.event_at AS eventAt
+      FROM login_events le LEFT JOIN users u ON u.id = le.account_id
+      LEFT JOIN aliases a ON a.user_id = le.account_id
+      WHERE ${where.join(" AND ")} ORDER BY le.event_at DESC LIMIT ?`)
+      .all(...params, query.limit) as Array<Record<string, unknown>>;
+    audit("admin", "admin.login_events.list", { count: rows.length, outcome: query.outcome }, req.ip);
+    return { events: rows, updatedAt: new Date().toISOString() };
   });
 }
