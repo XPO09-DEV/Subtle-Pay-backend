@@ -155,6 +155,7 @@ export function listPayments(userId: string, options: {
   limit?: number; before?: number; beforeId?: string; q?: string;
   status?: "pending" | "submitted" | "confirmed" | "failed";
   direction?: "in" | "out";
+  from?: number; to?: number;
 } = {}) {
   const limit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
   const where = ["(t.from_user = ? OR t.to_user = ?)"];
@@ -174,6 +175,9 @@ export function listPayments(userId: string, options: {
   if (options.status) { where.push("t.status = ?"); args.push(options.status); }
   if (options.direction === "out") { where.push("t.from_user = ?"); args.push(userId); }
   if (options.direction === "in") { where.push("t.to_user = ?"); args.push(userId); }
+  // Date bounds use epoch milliseconds, matching transactions.created_at.
+  if (options.from !== undefined) { where.push("t.created_at >= ?"); args.push(options.from); }
+  if (options.to !== undefined) { where.push("t.created_at < ?"); args.push(options.to); }
   if (options.before !== undefined) {
     if (options.beforeId) {
       where.push("(t.created_at < ? OR (t.created_at = ? AND t.id < ?))");
