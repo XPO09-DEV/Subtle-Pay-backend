@@ -21,8 +21,8 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     const key = req.headers["idempotency-key"];
     const userId = currentUser(req).id;
     return runIdempotent(userId, Array.isArray(key) ? key[0] : key, body, reply, async () => {
-      consumePaymentAuthorization(userId, body.authorizationToken, req.ip);
       const { authorizationToken: _authorizationToken, ...paymentBody } = body;
+      consumePaymentAuthorization(userId, body.authorizationToken, req.ip, paymentBody);
       return sendPayment(userId, paymentBody, req.ip);
     });
   });
