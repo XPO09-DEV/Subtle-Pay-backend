@@ -5,6 +5,7 @@ import rateLimit from "@fastify/rate-limit";
 import { config, isProd } from "./config.js";
 import { closeDb } from "./db.js";
 import { migrateTracking } from "./migrations/005-login-fund-holds-transaction-events.js";
+import { migrateWalletFeatures } from "./migrations/006-wallet-security-and-merchants.js";
 import { errorHandler, notFoundHandler } from "./lib/errors.js";
 import { initPassword } from "./lib/password.js";
 import { kmsSelfTest } from "./lib/kms.js";
@@ -23,10 +24,12 @@ import { providerRoutes } from "./modules/providers/providers.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
 import { reconcileSubmittedPayments } from "./modules/payments/payments.service.js";
 import { qrRoutes } from "./modules/qr/qr.routes.js";
+import { merchantRoutes } from "./modules/merchant/merchant.routes.js";
 
 // The old schema_migrations ledger is left untouched; this checksummed v5
 // tracking migration uses its own ledger and runs before the API starts.
 migrateTracking();
+migrateWalletFeatures();
 
 const app = Fastify({
   logger: {
@@ -59,6 +62,7 @@ await app.register(bridgeRoutes);
 await app.register(assetRoutes);
 await app.register(providerRoutes);
 await app.register(adminRoutes);
+await app.register(merchantRoutes);
 
 const hashMs = await initPassword();
 kmsSelfTest();
