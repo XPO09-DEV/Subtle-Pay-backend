@@ -160,11 +160,11 @@ export function getCoinStatsCoinList(options: { limit?: number; skip?: number; c
   return coinStatsRequest("coins", {
     limit: options.limit ?? 100, skip: options.skip ?? 0, currency: (options.currency ?? "USD").toUpperCase(),
     search: options.search?.trim() || undefined, coinIds: options.coinIds,
-  }, options.search ? 30_000 : 20_000);
+  }, 60_000);
 }
 export function getCoinStatsCharts(id: string, period: string, currency = "USD"): Promise<unknown> {
   if (!new Set(["24h", "1w", "1m", "3m", "6m", "1y", "all"]).has(period)) throw badRequest("Unsupported chart period.");
-  const ttl = period === "24h" ? 60_000 : period === "1w" ? 300_000 : period === "1m" ? 600_000 : period === "3m" ? 900_000 : 1_800_000;
+  const ttl = 60_000;
   return coinStatsRequest("coins/" + validateCoinId(id) + "/charts", { period, currency: currency.toUpperCase() }, ttl);
 }
 export function getCoinStatsMarkets(): Promise<unknown> { return coinStatsRequest("markets", {}, 60_000); }
