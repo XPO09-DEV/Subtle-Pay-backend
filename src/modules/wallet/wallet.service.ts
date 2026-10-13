@@ -1,4 +1,3 @@
-import { formatEther } from "viem";
 import { config } from "../../config.js";
 import { formatMon, getNativeBalance } from "../../chain/monad.js";
 import { db, type UserRow, type WalletRow } from "../../db.js";
@@ -57,7 +56,7 @@ export async function getWalletView(userId: string, force = false): Promise<Wall
     const wallet = getWalletRow(userId);
     const currency = user.currency as Currency;
     const rates = await getRates(currency);
-    const address = wallet.address as \`0x\${string}\`;
+    const address = wallet.address as `0x${string}`;
 
     const nativeWei = await getNativeBalance(address);
     const reservedWei = getActiveHoldTotalWei(userId);

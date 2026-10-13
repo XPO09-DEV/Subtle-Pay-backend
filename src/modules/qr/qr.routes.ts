@@ -47,7 +47,7 @@ export async function qrRoutes(app: FastifyInstance): Promise<void> {
     const issuedAt = Date.now();
     const payload = new URL("subtlepay://pay");
     payload.searchParams.set("v", "1");
-    payload.searchParams.set("to", alias ? `\${alias}@monad` : address);
+    payload.searchParams.set("to", alias ? `${alias}@monad` : address);
     payload.searchParams.set("addr", address);
     payload.searchParams.set("chain", String(CHAIN_ID));
     payload.searchParams.set("iat", String(issuedAt));
@@ -91,7 +91,7 @@ export async function qrRoutes(app: FastifyInstance): Promise<void> {
 
     if (!isAddress(address) ||
         (alias && !/^[a-z0-9_]{3,20}$/.test(alias)) ||
-        to !== (alias ? `\${alias}@monad` : address) ||
+        to !== (alias ? `${alias}@monad` : address) ||
         !/^\\d{13}$/.test(issuedAtRaw) ||
         !Number.isSafeInteger(issuedAt) ||
         issuedAt > now + 30_000 ||
