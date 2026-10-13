@@ -1,4 +1,4 @@
-import { isAddress } from "viem";
+import { isAddress, type Hash } from "viem";
 import { config } from "../../config.js";
 import {
   formatMon,
@@ -107,6 +107,7 @@ export async function sendPayment(
     });
     invalidateWalletViewCache(userId);
 
+    let submittedHash: Hash | null = null;
     try {
       const hash = await withDecryptedSecret(from.enc_priv_key, { userId, address: from.address }, async (secret) => {
         const key = `0x${secret.toString("hex")}` as `0x${string}`;
@@ -114,6 +115,8 @@ export async function sendPayment(
           ? sendToken(key, dest.address as `0x${string}`, tokenBase)
           : sendNative(key, dest.address as `0x${string}`, tokenBase);
       });
+
+      submittedHash = hash;
 
       // Persist the hash immediately after submission. A timeout waiting for a
       // receipt must not erase a potentially live transaction or its reservation.
@@ -146,12 +149,20 @@ export async function sendPayment(
     } catch (err) {
       const failedAt = Date.now();
       withTransaction(() => {
-        db.prepare(
-          `UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ? AND status IN ('pending','submitted')`
-        ).run("chain", failedAt, txId);
-        db.prepare(
-          `UPDATE fund_holds SET status = 'released', updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
-        ).run(failedAt, failedAt, txId);
+        if (submittedHash) {
+          // The RPC accepted a transaction. If persisting the receipt/status failed,
+          // keep it submitted and retain the hold until a later receipt reconciliation.
+          db.prepare(
+            `UPDATE transactions SET status = 'submitted', tx_hash = COALESCE(tx_hash, ?), failure_reason = NULL, updated_at = ? WHERE id = ? AND status IN ('pending','submitted')`
+          ).run(submittedHash, failedAt, txId);
+        } else {
+          db.prepare(
+            `UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ? AND status = 'pending'`
+          ).run("chain", failedAt, txId);
+          db.prepare(
+            `UPDATE fund_holds SET status = 'released', updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
+          ).run(failedAt, failedAt, txId);
+        }
       });
       invalidateWalletViewCache(userId);
       throw err;
