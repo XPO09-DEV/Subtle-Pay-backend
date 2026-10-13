@@ -34,6 +34,11 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
       q: z.string().trim().max(160).optional(),
       status: z.enum(["pending", "submitted", "confirmed", "failed"]).optional(),
       direction: z.enum(["in", "out"]).optional(),
+      from: z.coerce.number().int().positive().optional(),
+      to: z.coerce.number().int().positive().optional(),
+    }).refine((query) => query.from === undefined || query.to === undefined || query.to > query.from, {
+      message: "`to` must be after `from`",
+      path: ["to"],
     }).parse(req.query);
     return listPayments(currentUser(req).id, query);
   });
