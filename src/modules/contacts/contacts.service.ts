@@ -42,13 +42,17 @@ export function listContacts(ownerId: string) {
   // Return only the signed-in account's private contact list. Resolve wallet addresses
   // and public handles server-side instead of asking the browser to enumerate accounts.
   return db.prepare(`SELECT c.name, c.account_id AS accountId,
-      COALESCE(c.address, w.address) AS address, a.alias AS alias,
-      c.created_at AS createdAt
+      COALESCE(c.address, CASE WHEN EXISTS (
+        SELECT 1 FROM transactions t
+        WHERE (t.from_user = ? AND t.to_user = c.account_id)
+           OR (t.to_user = ? AND t.from_user = c.account_id)
+      ) THEN w.address END) AS address,
+      a.alias AS alias, c.created_at AS createdAt
     FROM contacts c
     LEFT JOIN wallets w ON w.user_id = c.account_id
     LEFT JOIN aliases a ON a.user_id = c.account_id
     WHERE c.owner_id = ?
-    ORDER BY c.name`).all(ownerId);
+    ORDER BY c.name`).all(ownerId, ownerId, ownerId);
 }
 export function deleteContact(ownerId: string, rawName: string) {
   const name = normalizeContactName(rawName);
