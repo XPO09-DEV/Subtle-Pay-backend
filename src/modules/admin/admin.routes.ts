@@ -136,4 +136,34 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return reply.type("text/csv; charset=utf-8").header("content-disposition", `attachment; filename="subtle-pay-${query.dataset}-${stamp}.csv"`)
       .header("cache-control", "no-store, private").send(toCsv(rowsFor(query.dataset)));
   });
+  app.get("/admin/merchant-applications", { preHandler: requireAdmin, config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (req) => {
+    const query = z.object({ status: z.enum(["pending", "approved", "rejected"]).optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(req.query);
+    const rows = db.prepare(`SELECT m.id, m.user_id AS userId, COALESCE(u.display_name, a.alias, '') AS displayName,
+      a.alias, m.reason, m.status, m.created_at AS createdAt, m.reviewed_at AS reviewedAt, m.review_note AS reviewNote
+      FROM merchant_autopay_applications m
+      JOIN users u ON u.id = m.user_id
+      LEFT JOIN aliases a ON a.user_id = m.user_id
+      WHERE (? IS NULL OR m.status = ?)
+      ORDER BY CASE m.status WHEN 'pending' THEN 0 ELSE 1 END, m.created_at DESC LIMIT ?`)
+      .all(query.status ?? null, query.status ?? null, query.limit) as Array<Record<string, unknown>>;
+    audit("admin", "admin.merchant_applications.list", { count: rows.length, status: query.status ?? "all" }, req.ip);
+    return { applications: rows, updatedAt: new Date().toISOString() };
+  });
+  app.post("/admin/merchant-applications/:id/review", { preHandler: requireAdmin, config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (req) => {
+    const params = z.object({ id: z.string().min(10).max(64) }).parse(req.params);
+    const body = z.object({ decision: z.enum(["approved", "rejected"]), note: z.string().trim().max(500).optional() }).parse(req.body);
+    const application = db.prepare("SELECT id, user_id AS userId, status FROM merchant_autopay_applications WHERE id = ?")
+      .get(params.id) as { id: string; userId: string; status: string } | undefined;
+    if (!application) throw new Error("Autopay application not found");
+    if (application.status !== "pending") throw new Error("This application has already been reviewed");
+    const now = Date.now();
+    db.prepare("UPDATE merchant_autopay_applications SET status = ?, reviewed_at = ?, reviewed_by = 'admin', review_note = ? WHERE id = ? AND status = 'pending'")
+      .run(body.decision, now, body.note ?? null, application.id);
+    if (body.decision === "approved") {
+      db.prepare("UPDATE merchant_profiles SET status = 'approved', verified_at = ?, updated_at = ? WHERE user_id = ?")
+        .run(now, now, application.userId);
+    }
+    audit("admin", "admin.merchant_application.reviewed", { applicationId: application.id, decision: body.decision }, req.ip);
+    return { ok: true, applicationId: application.id, status: body.decision, verifiedBadge: body.decision === "approved" };
+  });
 }
