@@ -7,6 +7,7 @@ import { encryptSecret, zeroize } from "../../lib/kms.js";
 import { badRequest, invalidCredentials } from "../../lib/errors.js";
 import { assertCurrency, type Currency } from "../../lib/currency.js";
 import { audit } from "../../lib/audit.js";
+import { createPayQrPayload } from "../../lib/paymentQr.js";
 
 function recordLoginEvent(input: {
   accountId: string | null; attemptedId: string; success: boolean;
@@ -41,7 +42,11 @@ export async function register(password: string, meta: SessionMeta) {
   const address = withTransaction(() => {
     db.prepare("INSERT INTO users (id, password_hash, currency, created_at, updated_at) VALUES (?, ?, 'USD', ?, ?)")
       .run(accountId, passwordHash, now, now);
-    return createWallet(accountId);
+    const walletAddress = createWallet(accountId);
+    // Issue and persist this wallet's permanent receive QR at account creation.
+    db.prepare("INSERT INTO wallet_qr (user_id, payload, chain_id, created_at) VALUES (?, ?, 10143, ?)")
+      .run(accountId, createPayQrPayload(walletAddress), now);
+    return walletAddress;
   });
   const session = await issueSession(accountId, meta);
   recordLoginEvent({ accountId, attemptedId: accountId, success: true, reason: "registration", meta });
@@ -56,7 +61,7 @@ export async function login(accountIdRaw: string, password: string, meta: Sessio
     audit(null, "auth.login_failed", { reason: "invalid_credentials" }, meta.ip);
     throw invalidCredentials();
   }
-  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(accountId) as UserRow | undefined;
+  const user = db.prepare("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL").get(accountId) as UserRow | undefined;
   if (!user) {
     await verifyPasswordDummy(password);
     recordLoginEvent({ accountId: null, attemptedId: accountIdRaw, success: false, reason: "invalid_credentials", meta });
@@ -100,7 +105,7 @@ export async function changePassword(userId: string, sessionId: string, oldPassw
   return { ok: true };
 }
 export function getMe(userId: string) {
-  const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at, created_at FROM users WHERE id = ?").get(userId) as
+  const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at, created_at FROM users WHERE id = ? AND deleted_at IS NULL").get(userId) as
     | { id: string; currency: string; display_name: string | null; region: string | null; region_consent_at: number | null; created_at: number } | undefined;
   if (!user) throw invalidCredentials();
   const alias = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as { alias: string } | undefined;
@@ -129,9 +134,29 @@ export function updateProfile(userId: string, input: { displayName?: string | nu
     if (!cleanedRegion) throw badRequest("Choose a region before opting in to share it", "BAD_REQUEST");
     region = cleanedRegion; regionConsentAt = Date.now();
   } else if (input.shareRegion === false) { region = null; regionConsentAt = null; }
-  db.prepare("UPDATE users SET display_name = ?, region = ?, region_consent_at = ?, updated_at = ? WHERE id = ?")
+  db.prepare("UPDATE users SET display_name = ?, region = ?, region_consent_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
     .run(displayName, region, regionConsentAt, Date.now(), userId);
-  return { displayName, region: regionConsentAt ? region : null, regionConsentAt };
+
+  // A human-readable handle is assigned once on the first profile-name save.
+  // Existing handles are never changed by editing the display name.
+  let aliasRow = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as { alias: string } | undefined;
+  if (!aliasRow && displayName) {
+    const reserved = new Set(["admin", "support", "subtle", "subtlepay", "monad", "system", "root"]);
+    let base = displayName.normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "").trim().split(/\\s+/)[0]?.toLowerCase().replace(/[^a-z0-9_]/g, "") ?? "";
+    if (base.length < 3 || reserved.has(base)) base = ("user" + userId.replace(/[^a-z0-9]/gi, "").slice(-8)).toLowerCase();
+    base = base.slice(0, 20);
+    for (let index = 1; index <= 9999; index++) {
+      const suffix = index === 1 ? "" : String(index);
+      const candidate = base.slice(0, 20 - suffix.length) + suffix;
+      const taken = db.prepare("SELECT 1 FROM aliases WHERE alias = ?").get(candidate);
+      if (!taken && !reserved.has(candidate)) {
+        db.prepare("INSERT INTO aliases (alias, user_id, created_at) VALUES (?, ?, ?)").run(candidate, userId, Date.now());
+        aliasRow = { alias: candidate };
+        break;
+      }
+    }
+  }
+  return { displayName, alias: aliasRow?.alias ?? null, region: regionConsentAt ? region : null, regionConsentAt };
 }
 export function setCurrency(userId: string, currency: string): { currency: Currency } {
   const code = assertCurrency(currency);
