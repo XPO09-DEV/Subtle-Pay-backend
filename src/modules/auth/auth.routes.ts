@@ -88,6 +88,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
   app.get("/me", { preHandler: requireAuth }, async (req) => getMe(currentUser(req).id));
 
+  app.get("/me/login-events", { preHandler: requireAuth, config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (req) => {
+    const query = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query);
+    const userId = currentUser(req).id;
+    const events = db.prepare(`SELECT id, success, reason, ip, user_agent AS userAgent, request_id AS requestId, event_at AS eventAt
+      FROM login_events WHERE account_id = ? ORDER BY event_at DESC LIMIT ?`)
+      .all(userId, query.limit) as Array<{ id: string; success: number; reason: string; ip: string | null; userAgent: string | null; requestId: string | null; eventAt: number }>;
+    return { events: events.map((event) => ({ ...event, success: event.success === 1 })), updatedAt: new Date().toISOString() };
+  });
+
   app.get("/me/sessions", { preHandler: requireAuth }, async (req) => {
     const user = currentUser(req);
     const now = Date.now();
