@@ -6,6 +6,11 @@ data/
 .env
 .env.*
 !.env.example
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
 *.db
 *.sqlite
 *.sqlite3
