@@ -58,7 +58,9 @@ async function loadAnkrAssets(address: string): Promise<{ assets: AnkrAsset[]; u
         signal: AbortSignal.timeout(10_000), cache: "no-store",
       });
       const envelope = await readJson<AnkrEnvelope>(response, "Ankr");
-      if (envelope.error) throw serviceUnavailable(envelope.error.message || "Ankr could not read this wallet.", "CHAIN_UNAVAILABLE");
+      if (envelope.error && Object.keys(envelope.error).length > 0) {
+        throw serviceUnavailable(envelope.error.message || "Ankr could not read this wallet.", "CHAIN_UNAVAILABLE");
+      }
       if (!envelope.result || !Array.isArray(envelope.result.assets)) {
         throw serviceUnavailable("Ankr returned an unexpected wallet response.", "CHAIN_UNAVAILABLE");
       }
