@@ -4,6 +4,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { config, isProd } from "./config.js";
 import { closeDb } from "./db.js";
+import { migrateTracking } from "./migrations/005-login-fund-holds-transaction-events.js";
 import { errorHandler, notFoundHandler } from "./lib/errors.js";
 import { initPassword } from "./lib/password.js";
 import { kmsSelfTest } from "./lib/kms.js";
@@ -20,28 +21,28 @@ import { bridgeRoutes } from "./modules/bridge/bridge.routes.js";
 import { assetRoutes } from "./modules/assets/assets.routes.js";
 import { providerRoutes } from "./modules/providers/providers.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
+import { reconcileSubmittedPayments } from "./modules/payments/payments.service.js";
+import { qrRoutes } from "./modules/qr/qr.routes.js";
+
+// The old schema_migrations ledger is left untouched; this checksummed v5
+// tracking migration uses its own ledger and runs before the API starts.
+migrateTracking();
 
 const app = Fastify({
   logger: {
     level: config.LOG_LEVEL,
-    transport: isProd
-      ? undefined
-      : { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } },
+    transport: isProd ? undefined : { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } },
   },
   trustProxy: isProd,
   bodyLimit: 16 * 1024,
   requestIdHeader: "x-request-id",
 });
-
 app.setErrorHandler(errorHandler);
 app.setNotFoundHandler(notFoundHandler);
 
 await app.register(helmet, { contentSecurityPolicy: false });
 await app.register(cors, { origin: config.CORS_ORIGINS, credentials: true });
-await app.register(rateLimit, {
-  max: config.RATE_LIMIT_MAX,
-  timeWindow: config.RATE_LIMIT_WINDOW_SECONDS * 1000,
-});
+await app.register(rateLimit, { max: config.RATE_LIMIT_MAX, timeWindow: config.RATE_LIMIT_WINDOW_SECONDS * 1000 });
 
 app.get("/health", async () => ({ ok: true }));
 await app.register(authRoutes);
@@ -49,6 +50,7 @@ await app.register(aliasRoutes);
 await app.register(ratesRoutes);
 await app.register(walletRoutes);
 await app.register(paymentRoutes);
+await app.register(qrRoutes);
 await app.register(withdrawRoutes);
 await app.register(contactRoutes);
 await app.register(billRoutes);
@@ -62,8 +64,14 @@ const hashMs = await initPassword();
 kmsSelfTest();
 app.log.info({ hashMs }, "password hasher ready");
 
+const reconcileTimer = setInterval(() => {
+  void reconcileSubmittedPayments().catch(() => app.log.warn({ task: "payment_reconciliation" }, "payment reconciliation failed"));
+}, 15_000);
+reconcileTimer.unref();
+
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "shutting down");
+  clearInterval(reconcileTimer);
   await app.close();
   closeDb();
   process.exit(0);
@@ -72,4 +80,4 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 await app.listen({ host: config.HOST, port: config.PORT });
-app.log.info({ port: config.PORT }, "subtle pay api listening");
+app.log.info({ port: config.PORT, chainId: config.MONAD_CHAIN_ID }, "subtle pay api listening");

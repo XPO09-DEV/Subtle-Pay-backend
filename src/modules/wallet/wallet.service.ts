@@ -1,13 +1,8 @@
-import { formatEther } from "viem";
+import { formatEther, type Address } from "viem";
 import { config } from "../../config.js";
-import { formatMon, formatToken, getNativeBalance, getTokenBalance } from "../../chain/monad.js";
+import { formatMon, getNativeBalance } from "../../chain/monad.js";
 import { db, type UserRow, type WalletRow } from "../../db.js";
-import {
-  microToDecimalString,
-  minorToDecimalString,
-  usdMicroToLocalMinor,
-  type Currency,
-} from "../../lib/currency.js";
+import { microToDecimalString, minorToDecimalString, usdMicroToLocalMinor, type Currency } from "../../lib/currency.js";
 import { notFound } from "../../lib/errors.js";
 import { getRates } from "../rates/rates.service.js";
 
@@ -17,28 +12,47 @@ export function getWalletRow(userId: string): WalletRow {
   return row;
 }
 
-export async function getWalletView(userId: string) {
-  const user = db.prepare("SELECT currency FROM users WHERE id = ?").get(userId) as Pick<UserRow, "currency">;
-  const wallet = getWalletRow(userId);
-  const currency = user.currency as Currency;
-  const rates = await getRates(currency);
-  const address = wallet.address as `0x${string}`;
+const WALLET_VIEW_TTL_MS = 10_000;
+const walletViewCache = new Map<string, { savedAt: number; value: Record<string, unknown> }>();
+const walletViewInflight = new Map<string, Promise<Record<string, unknown>>>();
 
-  const nativeWei = await getNativeBalance(address);
-  const tokenRaw = await getTokenBalance(address);
-  const balanceToken = tokenRaw !== null ? formatToken(tokenRaw, 6) : formatMon(nativeWei);
-
-  const usd = tokenRaw !== null ? Number(tokenRaw) / 1e6 : Number(formatEther(nativeWei)) * rates.tokenUsd;
-  const balanceUsdMicro = Math.round(usd * 1_000_000);
-  const localMinor = usdMicroToLocalMinor(balanceUsdMicro, rates.usdLocal, currency);
-
-  return {
-    address: wallet.address,
-    balanceToken,
-    balanceUsd: microToDecimalString(balanceUsdMicro),
-    balanceLocal: minorToDecimalString(localMinor, currency),
-    currency,
-    asset: config.STABLE_TOKEN_ADDRESS ? "USD" : "MON",
-    chainId: config.MONAD_CHAIN_ID,
-  };
+export async function getWalletView(userId: string, force = false) {
+  const cached = walletViewCache.get(userId);
+  if (!force && cached && Date.now() - cached.savedAt < WALLET_VIEW_TTL_MS) return { ...cached.value, cached: true };
+  const pending = !force ? walletViewInflight.get(userId) : undefined;
+  if (pending) return { ...(await pending), cached: true };
+  const request = (async () => {
+    const user = db.prepare("SELECT currency FROM users WHERE id = ?").get(userId) as Pick<UserRow, "currency">;
+    const wallet = getWalletRow(userId);
+    const currency = user.currency as Currency;
+    const address = wallet.address as Address;
+    const [rates, nativeWei, holds] = await Promise.all([
+      getRates(currency), getNativeBalance(address),
+      Promise.resolve(db.prepare("SELECT amount_atomic FROM fund_holds WHERE user_id = ? AND asset = 'MON' AND status = 'active'").all(userId) as Array<{ amount_atomic: string }>),
+    ]);
+    const reservedWei = holds.reduce((total, row) => total + BigInt(row.amount_atomic), 0n);
+    const availableWei = nativeWei > reservedWei ? nativeWei - reservedWei : 0n;
+    const usd = Number(formatEther(availableWei)) * rates.tokenUsd;
+    const balanceUsdMicro = Math.max(0, Math.round(usd * 1_000_000));
+    const localMinor = usdMicroToLocalMinor(balanceUsdMicro, rates.usdLocal, currency);
+    return {
+      address: wallet.address, balanceToken: formatMon(availableWei),
+      balanceUsd: microToDecimalString(balanceUsdMicro), balanceLocal: minorToDecimalString(localMinor, currency),
+      currency, asset: "MON", chainId: config.MONAD_CHAIN_ID, reservedToken: formatMon(reservedWei),
+      rates, updatedAt: new Date().toISOString(), cached: false,
+    };
+  })();
+  walletViewInflight.set(userId, request);
+  try {
+    const value = await request;
+    walletViewCache.set(userId, { savedAt: Date.now(), value });
+    if (walletViewCache.size > 500) {
+      const oldestKey = walletViewCache.keys().next().value;
+      if (oldestKey) walletViewCache.delete(oldestKey);
+    }
+    return value;
+  } finally {
+    if (walletViewInflight.get(userId) === request) walletViewInflight.delete(userId);
+  }
 }
+export function invalidateWalletView(userId: string): void { walletViewCache.delete(userId); }

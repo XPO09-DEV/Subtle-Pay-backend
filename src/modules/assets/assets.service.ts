@@ -1,42 +1,17 @@
-import { config } from "../../config.js";
-import { badRequest, unprocessable } from "../../lib/errors.js";
+import { unprocessable } from "../../lib/errors.js";
 
 export interface PayAsset {
-  code: "MON" | "USDC" | "USDT" | "BTC";
+  code: "MON";
   name: string;
-  chain: string;
-  settles: boolean;
-  reason?: string;
+  chain: "monad-testnet";
+  settles: true;
 }
-
+/** This build deliberately exposes only the native Monad Testnet token. */
 export function listAssets(): PayAsset[] {
-  const stableReady = Boolean(config.STABLE_TOKEN_ADDRESS);
-  return [
-    { code: "MON", name: "Monad", chain: "monad-testnet", settles: true },
-    {
-      code: "USDC",
-      name: "USD Coin",
-      chain: "monad-testnet",
-      settles: stableReady,
-      reason: stableReady ? undefined : "Stable token address is not configured",
-    },
-    {
-      code: "USDT",
-      name: "Tether",
-      chain: "monad-testnet",
-      settles: stableReady,
-      reason: stableReady ? undefined : "Stable token address is not configured",
-    },
-    { code: "BTC", name: "Bitcoin", chain: "bitcoin", settles: false, reason: "No Bitcoin rail in this build" },
-  ];
+  return [{ code: "MON", name: "Monad Testnet MON", chain: "monad-testnet", settles: true }];
 }
-
 export function assertPayableAsset(code: string | undefined): PayAsset["code"] {
-  const asset = (code ?? "MON").toUpperCase();
-  const known = listAssets().find((item) => item.code === asset);
-  if (!known) throw badRequest("Choose MON, USDC, USDT, or BTC", "BAD_REQUEST");
-  if (!known.settles) {
-    throw unprocessable(`${known.code} is on the picker, but only a configured asset can settle`, "CHAIN_UNAVAILABLE");
-  }
-  return known.code;
+  const asset = (code ?? "MON").trim().toUpperCase();
+  if (asset !== "MON") throw unprocessable("Only free native MON on Monad Testnet (chain ID 10143) is enabled in this hackathon build.", "CHAIN_UNAVAILABLE");
+  return "MON";
 }
