@@ -142,7 +142,7 @@ export function updateProfile(userId: string, input: { displayName?: string | nu
   let aliasRow = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as { alias: string } | undefined;
   if (!aliasRow && displayName) {
     const reserved = new Set(["admin", "support", "subtle", "subtlepay", "monad", "system", "root"]);
-    let base = displayName.normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "").trim().split(/\\s+/)[0]?.toLowerCase().replace(/[^a-z0-9_]/g, "") ?? "";
+    let base = displayName.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z0-9_]/g, "") ?? "";
     if (base.length < 3 || reserved.has(base)) base = ("user" + userId.replace(/[^a-z0-9]/gi, "").slice(-8)).toLowerCase();
     base = base.slice(0, 20);
     for (let index = 1; index <= 9999; index++) {
