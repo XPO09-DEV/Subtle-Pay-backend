@@ -62,8 +62,7 @@ export function migrateTracking(): void {
   db.exec(`CREATE TABLE IF NOT EXISTS integration_migrations (
     version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL
   ) STRICT;`);
-  const applied = db.prepare("SELECT name, checksum FROM integration_migrations WHERE version = ?").get(VERSION)
-    as { name: string; checksum: string } | undefined;
+  const applied = db.prepare("SELECT name, checksum FROM integration_migrations WHERE version = ?").get(VERSION) as { name: string; checksum: string } | undefined;
   if (applied) {
     if (applied.name !== NAME || applied.checksum !== checksum) throw new Error("Tracking migration 5 checksum mismatch; refusing startup.");
     return;
