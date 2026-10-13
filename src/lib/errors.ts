@@ -1,6 +1,5 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
-import { isProd } from "../config.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Error codes: stable strings the frontend can switch on                    */
@@ -227,7 +226,7 @@ export function errorHandler(err: unknown, req: FastifyRequest, reply: FastifyRe
   const n = normalize(err);
 
   if (n.status >= 500) {
-    req.log.error({ err, code: n.code }, "request failed");
+    req.log.error({ code: n.code, status: n.status, requestId: req.id }, "request failed");
   } else {
     req.log.debug({ code: n.code, status: n.status }, "request rejected");
   }
@@ -240,7 +239,6 @@ export function errorHandler(err: unknown, req: FastifyRequest, reply: FastifyRe
     requestId: req.id,
   };
   if (n.details !== undefined) body.details = n.details;
-  if (!isProd && n.status >= 500 && err instanceof Error) body.debug = err.message;
 
   return reply.status(n.status).send({ error: body });
 }

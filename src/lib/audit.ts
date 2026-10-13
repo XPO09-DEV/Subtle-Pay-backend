@@ -39,7 +39,8 @@ export function audit(
         sha256Hex(payload)
       );
     });
-  } catch (err) {
-    console.error("audit write failed", err instanceof Error ? err.message : err);
+  } catch {
+    // Do not emit database exceptions here: they can contain implementation details or sensitive values.
+    console.error("audit write failed");
   }
 }
