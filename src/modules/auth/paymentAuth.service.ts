@@ -3,7 +3,7 @@ import { config } from "../../config.js";
 import { db, withTransaction } from "../../db.js";
 import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
-import { badRequest, unauthorized, tooManyRequests, notFound } from "../../lib/errors.js";
+import { badRequest, unauthorized, tooManyRequests } from "../../lib/errors.js";
 import { verifyPassword } from "../../lib/password.js";
 
 const pinPepper = Buffer.from(config.PASSWORD_PEPPER, "hex");
@@ -48,11 +48,42 @@ export async function removeMpin(userId: string, currentPassword: string, ip?: s
   return { enabled: false };
 }
 
+export type PaymentIntent = {
+  to: string;
+  amount: string | number;
+  amountCurrency: string;
+  note?: string;
+  asset?: string;
+};
+
+function paymentIntentHash(intent: PaymentIntent): string {
+  return sha256Hex(JSON.stringify({
+    to: intent.to.trim().toLowerCase(),
+    amount: String(intent.amount).trim(),
+    amountCurrency: intent.amountCurrency.trim().toUpperCase(),
+    note: intent.note?.trim() ?? "",
+    asset: (intent.asset ?? "MON").trim().toUpperCase(),
+  }));
+}
+
 export async function createPaymentAuthorization(
   userId: string,
   factor: { method: "password"; secret: string } | { method: "mpin"; secret: string },
-  ip?: string
+  ip?: string,
+  intent?: PaymentIntent
 ) {
+  if (intent) {
+    const amount = Number(intent.amount);
+    if (!intent.to.trim() || !Number.isFinite(amount) || amount <= 0) {
+      throw badRequest("A valid recipient and positive amount are required for payment authorization.");
+    }
+    if (!["USD", "INR"].includes(intent.amountCurrency.toUpperCase())) {
+      throw badRequest("Payment currency must be USD or INR.");
+    }
+    if ((intent.asset ?? "MON").toUpperCase() !== "MON") {
+      throw badRequest("Only native MON is supported on Monad Testnet.", "ASSET_NOT_PAYABLE");
+    }
+  }
   const now = Date.now();
   let valid = false;
   if (factor.method === "password") {
@@ -83,19 +114,20 @@ export async function createPaymentAuthorization(
     throw unauthorized("Payment authorization failed. Check your password or MPIN.", "INVALID_CREDENTIALS");
   }
   const token = randomToken(32);
-  db.prepare("INSERT INTO payment_authorizations (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
-    .run(sha256Hex(token), userId, now + 120_000, now);
+  db.prepare("INSERT INTO payment_authorizations (token_hash, user_id, expires_at, created_at, intent_hash) VALUES (?, ?, ?, ?, ?)")
+    .run(sha256Hex(token), userId, now + 120_000, now, intent ? paymentIntentHash(intent) : null);
   audit(userId, "payment.authorized", { method: factor.method, expiresInSeconds: 120 }, ip);
   return { authorizationToken: token, expiresIn: 120 };
 }
 
 /** One-shot authorization is stored as a hash and consumed atomically before sending. */
-export function consumePaymentAuthorization(userId: string, token: string, ip?: string): void {
+export function consumePaymentAuthorization(userId: string, token: string, ip?: string, intent?: PaymentIntent): void {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw unauthorized("A fresh payment authorization is required.", "PAYMENT_AUTH_REQUIRED");
   const now = Date.now();
+  const expectedIntentHash = intent ? paymentIntentHash(intent) : null;
   const consumed = withTransaction(() => db.prepare(`UPDATE payment_authorizations SET used_at = ?
-    WHERE token_hash = ? AND user_id = ? AND used_at IS NULL AND expires_at > ?`)
-    .run(now, sha256Hex(token), userId, now).changes);
-  if (consumed !== 1) throw unauthorized("Payment authorization expired or was already used. Authorize again.", "PAYMENT_AUTH_REQUIRED");
-  audit(userId, "payment.authorization_consumed", undefined, ip);
+    WHERE token_hash = ? AND user_id = ? AND used_at IS NULL AND expires_at > ? AND intent_hash IS ?`)
+    .run(now, sha256Hex(token), userId, now, expectedIntentHash).changes);
+  if (consumed !== 1) throw unauthorized("Payment authorization is expired, already used, or does not match this payment. Authorize again.", "PAYMENT_AUTH_REQUIRED");
+  audit(userId, "payment.authorization_consumed", { paymentBound: intent !== undefined }, ip);
 }
