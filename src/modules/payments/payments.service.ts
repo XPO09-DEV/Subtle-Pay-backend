@@ -208,28 +208,49 @@ async function resolveDestination(to: string, ownerId?: string): Promise<{ addre
   return { address: row.address, userId: row.user_id };
 }
 
-export function listPayments(userId: string) {
-  const user = db.prepare("SELECT currency FROM users WHERE id = ?").get(userId) as { currency: Currency };
-  const rows = db
-    .prepare(
-      `SELECT t.*,
-              fa.alias AS from_alias,
-              ta.alias AS to_alias
-         FROM transactions t
-         LEFT JOIN aliases fa ON fa.user_id = t.from_user
-         LEFT JOIN aliases ta ON ta.user_id = t.to_user
-        WHERE t.from_user = ? OR t.to_user = ?
-        ORDER BY t.created_at DESC
-        LIMIT 50`
-    )
-    .all(userId, userId) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
+export interface PaymentListOptions {
+  limit?: number;
+  offset?: number;
+  status?: "pending" | "submitted" | "confirmed" | "failed";
+  direction?: "in" | "out";
+}
 
-  return rows.map((row) => {
+export function listPayments(userId: string, options: PaymentListOptions = {}) {
+  const limit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
+  const offset = Math.min(100_000, Math.max(0, Math.trunc(options.offset ?? 0)));
+  const where = ["(t.from_user = ? OR t.to_user = ?)"];
+  const params: Array<string | number> = [userId, userId];
+  if (options.status) {
+    where.push("t.status = ?");
+    params.push(options.status);
+  }
+  if (options.direction === "out") where.push("t.from_user = ?");
+  if (options.direction === "in") where.push("t.to_user = ?");
+  if (options.direction) params.push(userId);
+
+  const whereSql = where.join(" AND ");
+  const count = db.prepare(
+    `SELECT COUNT(*) AS total FROM transactions t WHERE ${whereSql}`
+  ).get(...params) as { total: number };
+  const rows = db.prepare(
+    `SELECT t.*,
+            fa.alias AS from_alias,
+            ta.alias AS to_alias
+       FROM transactions t
+       LEFT JOIN aliases fa ON fa.user_id = t.from_user
+       LEFT JOIN aliases ta ON ta.user_id = t.to_user
+      WHERE ${whereSql}
+      ORDER BY t.created_at DESC, t.id DESC
+      LIMIT ? OFFSET ?`
+  ).all(...params, limit + 1, offset) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
+
+  const hasMore = rows.length > limit;
+  const items = rows.slice(0, limit).map((row) => {
     const outgoing = row.from_user === userId;
     const localMinor = usdMicroToLocalMinor(row.amount_micro, row.fx_rate, row.display_currency as Currency);
     return {
       id: row.id,
-      direction: outgoing ? "out" : "in",
+      direction: outgoing ? "out" as const : "in" as const,
       counterparty: outgoing ? row.to_alias ?? row.to_address : row.from_alias ?? row.from_address,
       usdValue: microToDecimalString(row.amount_micro),
       localValue: minorToDecimalString(localMinor, row.display_currency as Currency),
@@ -239,6 +260,13 @@ export function listPayments(userId: string) {
       createdAt: new Date(row.created_at).toISOString(),
     };
   });
+  return {
+    items,
+    limit,
+    offset,
+    total: count.total,
+    nextOffset: hasMore ? offset + limit : null,
+  };
 }
 
 export { withTransaction };
