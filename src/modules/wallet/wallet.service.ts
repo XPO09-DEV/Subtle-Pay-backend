@@ -13,7 +13,7 @@ export function getWalletRow(userId: string): WalletRow {
 }
 
 type WalletView = {
-  address: Address;
+  address: string;
   balanceToken: string;
   balanceUsd: string;
   balanceLocal: string;
