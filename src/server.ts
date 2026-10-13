@@ -21,6 +21,7 @@ import { bridgeRoutes } from "./modules/bridge/bridge.routes.js";
 import { assetRoutes } from "./modules/assets/assets.routes.js";
 import { providerRoutes } from "./modules/providers/providers.routes.js";
 import { adminRoutes } from "./modules/admin/admin.routes.js";
+import { notificationRoutes } from "./modules/notifications/notifications.routes.js";
 
 const app = Fastify({
   logger: {
@@ -59,6 +60,7 @@ await app.register(bridgeRoutes);
 await app.register(assetRoutes);
 await app.register(providerRoutes);
 await app.register(adminRoutes);
+await app.register(notificationRoutes);
 
 const hashMs = await initPassword();
 kmsSelfTest();

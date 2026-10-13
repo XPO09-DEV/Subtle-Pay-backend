@@ -30,6 +30,7 @@ import { getRates } from "../rates/rates.service.js";
 import { getWalletRow, invalidateWalletViewCache } from "../wallet/wallet.service.js";
 import { getActiveHoldTotalWei } from "./holds.service.js";
 import { findContact } from "../contacts/contacts.service.js";
+import { insertPaymentNotification } from "../notifications/notifications.service.js";
 
 const locks = new Map<string, Promise<unknown>>();
 
@@ -124,6 +125,8 @@ export async function sendPayment(
         db.prepare(
           `UPDATE transactions SET status = 'submitted', tx_hash = ?, updated_at = ? WHERE id = ?`
         ).run(hash, Date.now(), txId);
+        insertPaymentNotification(userId, txId, "payment_submitted");
+        if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, "payment_submitted");
       });
       invalidateWalletViewCache(userId);
 
@@ -136,6 +139,11 @@ export async function sendPayment(
         db.prepare(
           `UPDATE fund_holds SET status = ?, updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
         ).run(status === "confirmed" ? "settled" : status === "failed" ? "released" : "active", finishedAt, status === "submitted" ? null : finishedAt, txId);
+        if (status === "confirmed" || status === "failed") {
+          const notificationType = status === "confirmed" ? "payment_confirmed" : "payment_failed";
+          insertPaymentNotification(userId, txId, notificationType);
+          if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, notificationType);
+        }
       });
       invalidateWalletViewCache(userId);
       audit(userId, "payment.send", { txId, status, usdMicro }, ip);
@@ -155,6 +163,8 @@ export async function sendPayment(
           db.prepare(
             `UPDATE transactions SET status = 'submitted', tx_hash = COALESCE(tx_hash, ?), failure_reason = NULL, updated_at = ? WHERE id = ? AND status IN ('pending','submitted')`
           ).run(submittedHash, failedAt, txId);
+          insertPaymentNotification(userId, txId, "payment_submitted");
+          if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, "payment_submitted");
         } else {
           db.prepare(
             `UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ? AND status = 'pending'`
@@ -162,6 +172,8 @@ export async function sendPayment(
           db.prepare(
             `UPDATE fund_holds SET status = 'released', updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
           ).run(failedAt, failedAt, txId);
+          insertPaymentNotification(userId, txId, "payment_failed");
+          if (dest.userId && dest.userId !== userId) insertPaymentNotification(dest.userId, txId, "payment_failed");
         }
       });
       invalidateWalletViewCache(userId);

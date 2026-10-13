@@ -272,6 +272,25 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_fund_holds_status_updated ON fund_holds(status, updated_at);
     `,
   },
+  {
+    version: 6,
+    name: "account_notifications",
+    sql: `
+      CREATE TABLE notifications (
+        id             TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+        type           TEXT NOT NULL CHECK (type IN ('payment_submitted','payment_confirmed','payment_failed')),
+        title          TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 80),
+        message        TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 240),
+        created_at     INTEGER NOT NULL,
+        read_at        INTEGER,
+        UNIQUE (user_id, transaction_id, type)
+      ) STRICT;
+      CREATE INDEX idx_notifications_user_created ON notifications(user_id, created_at DESC, id DESC);
+      CREATE INDEX idx_notifications_user_unread ON notifications(user_id, read_at, created_at DESC);
+    `,
+  },
 ];
 
 const checksum = (sql: string) =>
