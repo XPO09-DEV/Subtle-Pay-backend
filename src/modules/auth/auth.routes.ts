@@ -7,7 +7,7 @@ import { getHome } from "./home.js";
 import { currentUser, requireAuth } from "../../middleware/auth.js";
 import { revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.js";
 import { audit } from "../../lib/audit.js";
-import { unauthorized } from "../../lib/errors.js";
+import { badRequest, unauthorized } from "../../lib/errors.js";
 import { config } from "../../config.js";
 
 const passwordSchema = z.string().min(1).max(128);
