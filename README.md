@@ -37,7 +37,11 @@ Configure a long random `ADMIN_API_TOKEN` in the server environment. Requests re
 
 For local PowerShell development, generate a token and store it in the backend-only `.env` file:
 ```powershell
-$token = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+$bytes = New-Object byte[] 32
+$rng.GetBytes($bytes)
+$token = [BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
+$rng.Dispose()
 (Get-Content .env) -replace '^ADMIN_API_TOKEN=.*
 
 CSV is UTF-8 and opens in Excel. Exports are capped, spreadsheet formula injection is neutralized, responses are not cacheable, and sensitive key/password/token fields are excluded.
@@ -70,9 +74,8 @@ The fiat-withdrawal route is disabled until a real payout provider is integrated
 | `GET /admin/export.csv` | Admin audit/data exports |
 
 SQLite files live under `data/`. Add new checksummed migrations; never edit applied migrations.
-, "ADMIN_API_TOKEN=$token" | Set-Content .env
+, ("ADMIN_API_TOKEN=" + $token) | Set-Content .env
 ```
-Restart the backend after changing the environment. Use the value as the `X-Admin-Token` header for admin requests.
 
 - `GET /admin/overview` — account/wallet/payment counts, confirmed and unsettled payments, recent logins and opted-in regions.
 - `GET /admin/users?limit=50` — account names/handles, wallet addresses, on-chain balance, active fund holds and recent transactions.
@@ -85,7 +88,7 @@ Restart the backend after changing the environment. Use the value as the `X-Admi
 - `GET /admin/export.csv?dataset=sessions` — session metadata without token secrets/hashes.
 - `GET /admin/export.csv?dataset=audit` — audit actions, timestamps, details, IP and hash-chain metadata.
 
-Account holders can review their own active sessions with `GET /me/sessions` and recent login events with `GET /me/login-events`. The account settings use a server-side hashed six-digit MPIN or the current account password for payment authorization; the one-time authorization expires after two minutes and cannot be reused. Biometric/passkey enrollment is not implemented in this prototype, so do not present it as available.
+Account holders can review their own active sessions with `GET /me/sessions` and recent login events with `GET /me/login-events`. The account settings support a server-side hashed six-digit MPIN or the current account password for payment authorization; a one-time authorization expires after two minutes and cannot be reused. Biometric/passkey enrollment is not implemented in this prototype, so do not present it as available.
 
 A signed receive QR is persisted per account wallet when the wallet is created. Ordinary profile edits do not regenerate it. A handle is assigned on the first profile-name save and remains fixed until the account is deleted. Deletion invalidates sessions and destroys the encrypted wallet signing-key blob while retaining transaction/audit history.
 
