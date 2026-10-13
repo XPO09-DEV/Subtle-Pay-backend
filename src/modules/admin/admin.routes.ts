@@ -4,7 +4,7 @@ import { z } from "zod";
 import { config } from "../../config.js";
 import { db } from "../../db.js";
 import { audit } from "../../lib/audit.js";
-import { conflict, notFound } from "../../lib/errors.js";
+import { conflict, notFound, serviceUnavailable, unauthorized } from "../../lib/errors.js";
 import { formatEther, type Address } from "viem";
 import { getNativeBalance } from "../../chain/monad.js";
 
@@ -20,11 +20,11 @@ async function requireAdmin(_req: FastifyRequest, _reply: FastifyReply): Promise
   // Throwing aborts the request lifecycle before any admin handler runs.
   // The token is server-only and compared in constant time.
   if (!config.ADMIN_API_TOKEN) {
-    throw new Error("ADMIN_DISABLED: configure ADMIN_API_TOKEN on the backend before enabling admin endpoints.");
+    throw serviceUnavailable("Admin API is disabled until ADMIN_API_TOKEN is configured on the server.", "FORBIDDEN");
   }
   const raw = _req.headers["x-admin-token"];
   if (!matchesAdminToken(typeof raw === "string" ? raw : undefined)) {
-    throw new Error("UNAUTHORIZED: admin authorization required.");
+    throw unauthorized("Admin authorization required.");
   }
 }
 function timeSql(column: string): string {
