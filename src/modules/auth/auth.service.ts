@@ -1,6 +1,6 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { db, withTransaction, type UserRow } from "../../db.js";
-import { generateAccountId, isValidAccountId, normalizeAccountId, newId, sha256Hex } from "../../lib/crypto.js";
+import { generateAccountId, isValidAccountId, normalizeAccountId, newId, randomToken, sha256Hex } from "../../lib/crypto.js";
 import { assertNotLocked, hashPassword, needsRehash, recordLoginFailure, recordLoginSuccess, validatePasswordPolicy, verifyPassword, verifyPasswordDummy } from "../../lib/password.js";
 import { issueSession, revokeAllSessions, type SessionMeta } from "../../lib/tokens.js";
 import { encryptSecret, zeroize } from "../../lib/kms.js";
@@ -160,6 +160,35 @@ export function updateProfile(userId: string, input: { displayName?: string | nu
 }
 export function setCurrency(userId: string, currency: string): { currency: Currency } {
   const code = assertCurrency(currency);
-  db.prepare("UPDATE users SET currency = ?, updated_at = ? WHERE id = ?").run(code, Date.now(), userId);
+  db.prepare("UPDATE users SET currency = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL").run(code, Date.now(), userId);
   return { currency: code };
+}
+
+/** Soft-delete account identity and destroy its ability to sign future transactions. */
+export async function deleteAccount(userId: string, currentPassword: string, ip?: string) {
+  const user = db.prepare("SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL")
+    .get(userId) as { password_hash: string } | undefined;
+  if (!user || !(await verifyPassword(user.password_hash, currentPassword))) {
+    throw badRequest("Current password is incorrect.", "INVALID_CREDENTIALS");
+  }
+  const now = Date.now();
+  revokeAllSessions(userId);
+  withTransaction(() => {
+    db.prepare("DELETE FROM aliases WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM wallet_qr WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM pin_credentials WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM payment_authorizations WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM merchant_autopay_applications WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM merchant_profiles WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM contacts WHERE owner_id = ?").run(userId);
+    // Keep the public address for historical audit references, but irreversibly
+    // overwrite the encrypted signing-key blob so this wallet cannot spend again.
+    db.prepare("UPDATE wallets SET enc_priv_key = ?, kek_version = 0 WHERE user_id = ?")
+      .run("DESTROYED:" + randomToken(16), userId);
+    db.prepare(`UPDATE users SET password_hash = ?, display_name = NULL, region = NULL,
+      region_consent_at = NULL, deleted_at = ?, updated_at = ? WHERE id = ?`)
+      .run("deleted:" + randomToken(32), now, now, userId);
+  });
+  audit(userId, "account.deleted", { walletKeyDestroyed: true, aliasReleased: true }, ip);
+  return { ok: true };
 }
