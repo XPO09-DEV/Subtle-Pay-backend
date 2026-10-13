@@ -12,16 +12,30 @@ export function getWalletRow(userId: string): WalletRow {
   return row;
 }
 
+type WalletView = {
+  address: Address;
+  balanceToken: string;
+  balanceUsd: string;
+  balanceLocal: string;
+  currency: Currency;
+  asset: "MON";
+  chainId: typeof config.MONAD_CHAIN_ID;
+  reservedToken: string;
+  rates: Awaited<ReturnType<typeof getRates>>;
+  updatedAt: string;
+  cached: boolean;
+};
+
 const WALLET_VIEW_TTL_MS = 10_000;
-const walletViewCache = new Map<string, { savedAt: number; value: Record<string, unknown> }>();
-const walletViewInflight = new Map<string, Promise<Record<string, unknown>>>();
+const walletViewCache = new Map<string, { savedAt: number; value: WalletView }>();
+const walletViewInflight = new Map<string, Promise<WalletView>>();
 
 export async function getWalletView(userId: string, force = false) {
   const cached = walletViewCache.get(userId);
   if (!force && cached && Date.now() - cached.savedAt < WALLET_VIEW_TTL_MS) return { ...cached.value, cached: true };
   const pending = !force ? walletViewInflight.get(userId) : undefined;
   if (pending) return { ...(await pending), cached: true };
-  const request = (async () => {
+  const request: Promise<WalletView> = (async () => {
     const user = db.prepare("SELECT currency FROM users WHERE id = ?").get(userId) as Pick<UserRow, "currency">;
     const wallet = getWalletRow(userId);
     const currency = user.currency as Currency;
