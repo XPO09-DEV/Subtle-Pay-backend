@@ -30,7 +30,7 @@ function signature(address: string, alias: string, issuedAt: number): string {
 }
 
 function invalidQr(): never {
-  throw badRequest("Payment QR is invalid or expired", "INVALID_QR");
+  throw badRequest("Payment QR is invalid or expired", "BAD_REQUEST");
 }
 
 export async function qrRoutes(app: FastifyInstance): Promise<void> {
@@ -42,7 +42,7 @@ export async function qrRoutes(app: FastifyInstance): Promise<void> {
 
     const me = getMe(currentUser(req).id);
     const address = me.walletAddress;
-    if (!address || !isAddress(address)) throw notFound("Account wallet not found", "WALLET_NOT_FOUND");
+    if (!address || !isAddress(address)) throw notFound("Account wallet not found", "NOT_FOUND");
     const alias = me.alias ?? "";
     const issuedAt = Date.now();
     const payload = new URL("subtlepay://pay");
