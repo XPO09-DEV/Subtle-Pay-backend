@@ -3,9 +3,9 @@ import { getRates } from "../rates/rates.service.js";
 import { getWalletView } from "../wallet/wallet.service.js";
 
 /** One call for the app home screen: identity, wallet, and the live rate. */
-export async function getHome(userId: string) {
+export async function getHome(userId: string, force = false) {
   const me = getMe(userId);
-  const [wallet, rates] = await Promise.all([getWalletView(userId), getRates(me.currency)]);
+  const [wallet, rates] = await Promise.all([getWalletView(userId, force), getRates(me.currency)]);
   return {
     accountId: me.accountId,
     alias: me.alias,
@@ -19,6 +19,9 @@ export async function getHome(userId: string) {
     balanceLocal: wallet.balanceLocal,
     asset: wallet.asset,
     chainId: wallet.chainId,
+    onChainBalanceToken: wallet.onChainBalanceToken,
+    reservedToken: wallet.reservedToken,
+    balanceUpdatedAt: wallet.balanceUpdatedAt,
     rates,
   };
 }

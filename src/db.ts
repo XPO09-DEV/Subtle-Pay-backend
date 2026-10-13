@@ -237,6 +237,41 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE users ADD COLUMN region_consent_at INTEGER;
     `,
   },
+  {
+    version: 5,
+    name: "login_events_and_fund_holds",
+    sql: `
+      CREATE TABLE login_events (
+        id               TEXT PRIMARY KEY,
+        user_id          TEXT REFERENCES users(id) ON DELETE SET NULL,
+        account_id_hash  TEXT NOT NULL CHECK (length(account_id_hash) = 64),
+        outcome          TEXT NOT NULL CHECK (outcome IN ('success','failure')),
+        reason           TEXT CHECK (reason IS NULL OR reason IN ('invalid_account_id','unknown_account','bad_password','locked')),
+        ip               TEXT,
+        user_agent       TEXT,
+        created_at       INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX idx_login_events_user_created ON login_events(user_id, created_at DESC);
+      CREATE INDEX idx_login_events_created ON login_events(created_at DESC);
+      CREATE INDEX idx_login_events_outcome_created ON login_events(outcome, created_at DESC);
+
+      CREATE TABLE fund_holds (
+        id              TEXT PRIMARY KEY,
+        transaction_id  TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE RESTRICT,
+        user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        amount_wei      TEXT NOT NULL
+                        CHECK (length(amount_wei) BETWEEN 1 AND 78
+                               AND amount_wei GLOB '[1-9]*'
+                               AND amount_wei NOT GLOB '*[^0-9]*'),
+        status          TEXT NOT NULL CHECK (status IN ('active','released','settled')),
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL,
+        resolved_at     INTEGER
+      ) STRICT;
+      CREATE INDEX idx_fund_holds_user_status ON fund_holds(user_id, status, created_at DESC);
+      CREATE INDEX idx_fund_holds_status_updated ON fund_holds(status, updated_at);
+    `,
+  },
 ];
 
 const checksum = (sql: string) =>

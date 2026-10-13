@@ -3,6 +3,7 @@ import { config } from "../../config.js";
 import {
   formatMon,
   formatToken,
+  estimateNativeTransferFee,
   getNativeBalance,
   getTokenBalance,
   sendNative,
@@ -26,7 +27,8 @@ import { withDecryptedSecret } from "../../lib/kms.js";
 import { audit } from "../../lib/audit.js";
 import { normalizeAlias } from "../alias/alias.service.js";
 import { getRates } from "../rates/rates.service.js";
-import { getWalletRow } from "../wallet/wallet.service.js";
+import { getWalletRow, invalidateWalletViewCache } from "../wallet/wallet.service.js";
+import { getActiveHoldTotalWei } from "./holds.service.js";
 import { findContact } from "../contacts/contacts.service.js";
 
 const locks = new Map<string, Promise<unknown>>();
@@ -79,11 +81,31 @@ export async function sendPayment(
 
     const txId = newId();
     const now = Date.now();
-    db.prepare(
-      `INSERT INTO transactions
-         (id, from_user, to_user, from_address, to_address, amount_micro, display_currency, fx_rate, status, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-    ).run(txId, userId, dest.userId, from.address, dest.address, usdMicro, currency, rates.usdLocal, input.note ?? null, now, now);
+    const estimatedFeeWei = stable
+      ? 0n
+      : await estimateNativeTransferFee(
+          from.address as `0x${string}`,
+          dest.address as `0x${string}`,
+          tokenBase
+        );
+    const reservedWei = tokenBase + estimatedFeeWei;
+
+    // Recheck all active holds while holding SQLite's IMMEDIATE write lock, then
+    // reserve this amount atomically with the transaction record.
+    withTransaction(() => {
+      const activeHolds = getActiveHoldTotalWei(userId);
+      if (!stable && balance < activeHolds + reservedWei) throw insufficientFunds();
+      db.prepare(
+        `INSERT INTO transactions
+           (id, from_user, to_user, from_address, to_address, amount_micro, display_currency, fx_rate, status, note, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+      ).run(txId, userId, dest.userId, from.address, dest.address, usdMicro, currency, rates.usdLocal, input.note ?? null, now, now);
+      db.prepare(
+        `INSERT INTO fund_holds (id, transaction_id, user_id, amount_wei, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', ?, ?)`
+      ).run(txId, txId, userId, reservedWei.toString(), now, now);
+    });
+    invalidateWalletViewCache(userId);
 
     try {
       const hash = await withDecryptedSecret(from.enc_priv_key, { userId, address: from.address }, async (secret) => {
@@ -92,11 +114,27 @@ export async function sendPayment(
           ? sendToken(key, dest.address as `0x${string}`, tokenBase)
           : sendNative(key, dest.address as `0x${string}`, tokenBase);
       });
+
+      // Persist the hash immediately after submission. A timeout waiting for a
+      // receipt must not erase a potentially live transaction or its reservation.
+      withTransaction(() => {
+        db.prepare(
+          `UPDATE transactions SET status = 'submitted', tx_hash = ?, updated_at = ? WHERE id = ?`
+        ).run(hash, Date.now(), txId);
+      });
+      invalidateWalletViewCache(userId);
+
       const status = await waitConfirmed(hash);
-      const confirmedAt = status === "confirmed" ? Date.now() : null;
-      db.prepare(
-        `UPDATE transactions SET status = ?, tx_hash = ?, updated_at = ?, confirmed_at = ? WHERE id = ?`
-      ).run(status, hash, Date.now(), confirmedAt, txId);
+      const finishedAt = Date.now();
+      withTransaction(() => {
+        db.prepare(
+          `UPDATE transactions SET status = ?, tx_hash = ?, updated_at = ?, confirmed_at = ? WHERE id = ?`
+        ).run(status, hash, finishedAt, status === "confirmed" ? finishedAt : null, txId);
+        db.prepare(
+          `UPDATE fund_holds SET status = ?, updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
+        ).run(status === "confirmed" ? "settled" : status === "failed" ? "released" : "active", finishedAt, status === "submitted" ? null : finishedAt, txId);
+      });
+      invalidateWalletViewCache(userId);
       audit(userId, "payment.send", { txId, status, usdMicro }, ip);
       return {
         txId,
@@ -106,9 +144,16 @@ export async function sendPayment(
         txHash: hash,
       };
     } catch (err) {
-      db.prepare(
-        `UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?`
-      ).run("chain", Date.now(), txId);
+      const failedAt = Date.now();
+      withTransaction(() => {
+        db.prepare(
+          `UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ? AND status IN ('pending','submitted')`
+        ).run("chain", failedAt, txId);
+        db.prepare(
+          `UPDATE fund_holds SET status = 'released', updated_at = ?, resolved_at = ? WHERE transaction_id = ? AND status = 'active'`
+        ).run(failedAt, failedAt, txId);
+      });
+      invalidateWalletViewCache(userId);
       throw err;
     }
   });
