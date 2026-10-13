@@ -112,7 +112,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/auth/mpin/status", { preHandler: requireAuth }, async (req) => getMpinStatus(currentUser(req).id));
   app.put("/auth/mpin", { preHandler: requireAuth, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req) => {
-    const body = z.object({ currentPassword: passwordSchema, pin: z.string().regex(/^\\d{6}$/) }).parse(req.body);
+    const body = z.object({ currentPassword: passwordSchema, pin: z.string().regex(/^\d{6}$/) }).parse(req.body);
     return setMpin(currentUser(req).id, body.currentPassword, body.pin, req.ip);
   });
   app.delete("/auth/mpin", { preHandler: requireAuth, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req) => {
@@ -122,7 +122,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/payment-authorization", { preHandler: requireAuth, config: { rateLimit: { max: 8, timeWindow: 60_000 } } }, async (req) => {
     const body = z.discriminatedUnion("method", [
       z.object({ method: z.literal("password"), secret: passwordSchema }),
-      z.object({ method: z.literal("mpin"), secret: z.string().regex(/^\\d{6}$/) }),
+      z.object({ method: z.literal("mpin"), secret: z.string().regex(/^\d{6}$/) }),
     ]).parse(req.body);
     return createPaymentAuthorization(currentUser(req).id, body, req.ip);
   });
