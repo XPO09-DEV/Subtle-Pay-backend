@@ -16,10 +16,16 @@ function matchesAdminToken(value: string | undefined): boolean {
   const actual = Buffer.from(value, "utf8"), wanted = Buffer.from(expected, "utf8");
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
-async function requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-  if (!config.ADMIN_API_TOKEN) { await reply.code(503).send({ error: { code: "ADMIN_DISABLED", message: "Admin API is disabled until ADMIN_API_TOKEN is configured on the server." } }); return; }
-  const raw = req.headers["x-admin-token"];
-  if (!matchesAdminToken(typeof raw === "string" ? raw : undefined)) await reply.code(401).send({ error: { code: "UNAUTHORIZED", message: "Admin authorization required." } });
+async function requireAdmin(_req: FastifyRequest, _reply: FastifyReply): Promise<void> {
+  // Throwing aborts the request lifecycle before any admin handler runs.
+  // The token is server-only and compared in constant time.
+  if (!config.ADMIN_API_TOKEN) {
+    throw new Error("ADMIN_DISABLED: configure ADMIN_API_TOKEN on the backend before enabling admin endpoints.");
+  }
+  const raw = _req.headers["x-admin-token"];
+  if (!matchesAdminToken(typeof raw === "string" ? raw : undefined)) {
+    throw new Error("UNAUTHORIZED: admin authorization required.");
+  }
 }
 function timeSql(column: string): string {
   return "CASE WHEN " + column + " IS NULL THEN NULL ELSE strftime('%Y-%m-%dT%H:%M:%fZ', " + column + " / 1000.0, 'unixepoch') END";
