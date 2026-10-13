@@ -33,7 +33,7 @@ export async function qrRoutes(app: FastifyInstance): Promise<void> {
     requireTestnet();
     const query = querySchema.parse(req.query);
     if (query.amount !== undefined && Number(query.amount) <= 0) throw badRequest("Amount must be greater than zero", "INVALID_AMOUNT");
-    if (query.amount === undefined && query.currency !== undefined) throw badRequest("Currency requires an amount.", "INVALID_QR");
+    if (query.amount === undefined && query.currency !== undefined) throw badRequest("Currency requires an amount.");
 
     const userId = currentUser(req).id;
     const wallet = getWalletRow(userId);
