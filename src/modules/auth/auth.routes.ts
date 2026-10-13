@@ -129,11 +129,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return removeMpin(currentUser(req).id, body.currentPassword, req.ip);
   });
   app.post("/auth/payment-authorization", { preHandler: requireAuth, config: { rateLimit: { max: 8, timeWindow: 60_000 } } }, async (req) => {
+    const intentSchema = z.object({
+      to: z.string().trim().min(2).max(64),
+      amount: z.union([z.string(), z.number()]),
+      amountCurrency: z.string().length(3),
+      note: z.string().max(140).optional(),
+      asset: z.string().max(8).optional(),
+    });
     const body = z.discriminatedUnion("method", [
-      z.object({ method: z.literal("password"), secret: passwordSchema }),
-      z.object({ method: z.literal("mpin"), secret: z.string().regex(/^\d{6}$/) }),
+      z.object({ method: z.literal("password"), secret: passwordSchema, intent: intentSchema.optional() }),
+      z.object({ method: z.literal("mpin"), secret: z.string().regex(/^\d{6}$/), intent: intentSchema.optional() }),
     ]).parse(req.body);
-    return createPaymentAuthorization(currentUser(req).id, body, req.ip);
+    const { intent, ...factor } = body;
+    return createPaymentAuthorization(currentUser(req).id, factor, req.ip, intent);
   });
   app.post("/me/delete", { preHandler: requireAuth, config: { rateLimit: { max: 3, timeWindow: 60_000 } } }, async (req, reply) => {
     const body = z.object({ currentPassword: passwordSchema, confirmation: z.literal("DELETE") }).parse(req.body);
