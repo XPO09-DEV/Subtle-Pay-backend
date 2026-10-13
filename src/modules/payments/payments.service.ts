@@ -187,17 +187,30 @@ export function listPayments(userId: string, options: {
       args.push(options.before);
     }
   }
-  const rows = db.prepare(`SELECT t.*, fa.alias AS from_alias, ta.alias AS to_alias
-    FROM transactions t LEFT JOIN aliases fa ON fa.user_id = t.from_user LEFT JOIN aliases ta ON ta.user_id = t.to_user
+  const rows = db.prepare(`SELECT t.*, fa.alias AS from_alias, ta.alias AS to_alias,
+      fm.public_name AS from_merchant_name, tm.public_name AS to_merchant_name
+    FROM transactions t
+    LEFT JOIN aliases fa ON fa.user_id = t.from_user
+    LEFT JOIN aliases ta ON ta.user_id = t.to_user
+    LEFT JOIN merchant_profiles fm ON fm.user_id = t.from_user AND fm.status != 'suspended'
+    LEFT JOIN merchant_profiles tm ON tm.user_id = t.to_user AND tm.status != 'suspended'
     WHERE ${where.join(" AND ")}
     ORDER BY t.created_at DESC, t.id DESC LIMIT ?`)
-    .all(...args, limit) as Array<TransactionRow & { from_alias: string | null; to_alias: string | null }>;
+    .all(...args, limit) as Array<TransactionRow & {
+      from_alias: string | null; to_alias: string | null;
+      from_merchant_name: string | null; to_merchant_name: string | null;
+    }>;
   return rows.map((row) => {
     const outgoing = row.from_user === userId;
+    const counterpartyAddress = outgoing ? row.to_address : row.from_address;
+    const counterpartyAlias = outgoing ? row.to_alias : row.from_alias;
+    const counterpartyMerchantName = outgoing ? row.to_merchant_name : row.from_merchant_name;
     const localMinor = usdMicroToLocalMinor(row.amount_micro, row.fx_rate, row.display_currency as Currency);
     return {
       id: row.id, direction: outgoing ? "out" : "in",
-      counterparty: outgoing ? row.to_alias ?? row.to_address : row.from_alias ?? row.from_address,
+      counterparty: counterpartyAlias ?? counterpartyAddress,
+      counterpartyAddress, counterpartyAlias,
+      counterpartyIsMerchant: Boolean(counterpartyMerchantName), counterpartyMerchantName,
       usdValue: microToDecimalString(row.amount_micro), localValue: minorToDecimalString(localMinor, row.display_currency as Currency),
       displayCurrency: row.display_currency, status: row.status, txHash: row.tx_hash, note: row.note,
       confirmedAt: row.confirmed_at, updatedAt: row.updated_at, createdAt: new Date(row.created_at).toISOString(),
