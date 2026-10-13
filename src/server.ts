@@ -6,6 +6,7 @@ import { config, isProd } from "./config.js";
 import { closeDb } from "./db.js";
 import { migrateTracking } from "./migrations/005-login-fund-holds-transaction-events.js";
 import { migrateWalletFeatures } from "./migrations/006-wallet-security-and-merchants.js";
+import { migratePaymentAuthorizationIntent } from "./migrations/007-payment-authorization-intent.js";
 import { errorHandler, notFoundHandler } from "./lib/errors.js";
 import { initPassword } from "./lib/password.js";
 import { kmsSelfTest } from "./lib/kms.js";
@@ -30,6 +31,7 @@ import { merchantRoutes } from "./modules/merchant/merchant.routes.js";
 // tracking migration uses its own ledger and runs before the API starts.
 migrateTracking();
 migrateWalletFeatures();
+migratePaymentAuthorizationIntent();
 
 const app = Fastify({
   logger: {
