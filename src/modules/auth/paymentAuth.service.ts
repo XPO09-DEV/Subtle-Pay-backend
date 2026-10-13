@@ -81,7 +81,7 @@ export async function createPaymentAuthorization(
       throw badRequest("Payment currency must be USD or INR.");
     }
     if ((intent.asset ?? "MON").toUpperCase() !== "MON") {
-      throw badRequest("Only native MON is supported on Monad Testnet.", "ASSET_NOT_PAYABLE");
+      throw badRequest("Only native MON is supported on Monad Testnet.");
     }
   }
   const now = Date.now();
