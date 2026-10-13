@@ -4,6 +4,7 @@ import { currentUser, requireAuth } from "../../middleware/auth.js";
 import QRCode from "qrcode";
 import { assertPayableAsset } from "../assets/assets.service.js";
 import { createBill, getBill, payBill } from "./bills.service.js";
+import { consumePaymentAuthorization } from "../auth/paymentAuth.service.js";
 
 export async function billRoutes(app: FastifyInstance): Promise<void> {
   app.post("/bills", { preHandler: requireAuth }, async (req) => {
@@ -27,7 +28,10 @@ export async function billRoutes(app: FastifyInstance): Promise<void> {
     return reply.type("image/png").send(png);
   });
 
-  app.post("/bills/:id/pay", { preHandler: requireAuth }, async (req) =>
-    payBill(currentUser(req).id, (req.params as { id: string }).id, req.ip)
-  );
+  app.post("/bills/:id/pay", { preHandler: requireAuth, config: { rateLimit: { max: 10, timeWindow: 60_000 } } }, async (req) => {
+    const body = z.object({ authorizationToken: z.string().min(40).max(64) }).parse(req.body);
+    const userId = currentUser(req).id;
+    consumePaymentAuthorization(userId, body.authorizationToken, req.ip);
+    return payBill(userId, (req.params as { id: string }).id, req.ip);
+  });
 }
