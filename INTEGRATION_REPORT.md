@@ -50,7 +50,7 @@ A new numbered, SHA-256-checksummed tracking migration at src/migrations/005-log
 
 ## Step 7 — Verification status
 
-Passed: source syntax parse checks for 40 backend and 40 frontend TypeScript/TSX files; migration SQL applied in SQLite during inspection with tracking tables STRICT; preservation check showed existing migration SQL versions 1–4 unchanged; chain ID and response allowlists reviewed statically.
+Passed: source syntax parse checks for 41 backend and 40 frontend TypeScript/TSX files; migration SQL applied in SQLite during inspection with tracking tables STRICT; preservation check showed existing migration SQL versions 1–4 unchanged; chain ID and response allowlists reviewed statically.
 
 Not completed: npm dependency installation/build and live end-to-end chain flow. npm ci --offline could not install pinned zod@4.6.5 because the package is not cached, and the attempted normal install did not produce usable node_modules. No testnet RPC endpoint, faucet-funded test account or admin token was supplied. Consequently there is no live register→send→receipt→admin test and no measured <50 ms cached / <200 ms live latency claim.
 
