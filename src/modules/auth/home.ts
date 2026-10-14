@@ -9,6 +9,7 @@ export async function getHome(userId: string, forceRefresh = false) {
     accountId: me.accountId, alias: me.alias, displayName: me.displayName,
     region: me.region, regionConsentAt: me.regionConsentAt, currency: me.currency,
     address: wallet.address, balanceToken: wallet.balanceToken, balanceUsd: wallet.balanceUsd,
+    stableBalanceToken: wallet.stableBalanceToken,
     balanceLocal: wallet.balanceLocal, asset: wallet.asset, chainId: wallet.chainId, rates: wallet.rates,
   };
 }
