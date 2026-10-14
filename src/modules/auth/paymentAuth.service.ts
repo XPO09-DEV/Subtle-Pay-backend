@@ -68,8 +68,9 @@ function validatePaymentIntent(intent: PaymentIntent): void {
     throw badRequest("A valid recipient and positive amount are required for payment authorization.");
   }
   if (intent.note && intent.note.length > 140) throw badRequest("Note is too long.");
-  if ((intent.asset ?? "MON").trim().toUpperCase() !== "MON") {
-    throw badRequest("Only native MON is supported on Monad Testnet.");
+  const asset = (intent.asset ?? "MON").trim().toUpperCase();
+  if (asset !== "MON" && !(asset === "USDC" && config.STABLE_TOKEN_ADDRESS)) {
+    throw badRequest("Only MON and configured USDC on Monad Testnet can be used for payment.");
   }
 }
 
