@@ -192,16 +192,32 @@ function walletClient(privateKeyHex: `0x${string}`) {
   return createWalletClient({ account: privateKeyToAccount(privateKeyHex), transport: http(config.MONAD_RPC_URL, { timeout: 20_000, retryCount: 0 }) });
 }
 export async function sendNative(privateKeyHex: `0x${string}`, to: Address, value: bigint): Promise<Hash> {
-  try { await assertMonadTestnet(); const feePolicy = await loadGasFeePolicy();
-    return await walletClient(privateKeyHex).sendTransaction({ to, value, ...(feePolicy.overrides ?? {}), chain: null }); }
-  catch (err) { throw serviceUnavailable("Payment could not be submitted to Monad", "CHAIN_UNAVAILABLE", err); }
+  try {
+    await assertMonadTestnet();
+    const feePolicy = await loadGasFeePolicy();
+    return await walletClient(privateKeyHex).sendTransaction({
+      to,
+      value,
+      ...(feePolicy.overrides ?? {}),
+      chain: null,
+    });
+  } catch (err) {
+    throw serviceUnavailable("Payment could not be submitted to Monad", "CHAIN_UNAVAILABLE", err);
+  }
 }
 export async function sendToken(privateKeyHex: `0x${string}`, to: Address, amount: bigint): Promise<Hash> {
   if (!config.STABLE_TOKEN_ADDRESS) throw serviceUnavailable("Stable token is not configured", "CHAIN_UNAVAILABLE");
   try {
     await assertMonadTestnet();
     const feePolicy = await loadGasFeePolicy();
-    return await walletClient(privateKeyHex).writeContract({ address: config.STABLE_TOKEN_ADDRESS as Address, abi: erc20Abi, functionName: "transfer", args: [to, amount], ...(feePolicy.overrides ?? {}), chain: null });
+    return await walletClient(privateKeyHex).writeContract({
+      address: config.STABLE_TOKEN_ADDRESS as Address,
+      abi: erc20Abi,
+      functionName: "transfer",
+      args: [to, amount],
+      ...(feePolicy.overrides ?? {}),
+      chain: null,
+    });
   } catch (err) { throw serviceUnavailable("Token transfer could not be submitted", "CHAIN_UNAVAILABLE", err); }
 }
 /** Relayer drips a little testnet MON so a fresh wallet can pay gas. */
@@ -210,8 +226,9 @@ export async function ensureGas(address: Address): Promise<void> {
   if (bal >= parseEther("0.01")) return;
   try {
     await assertMonadTestnet();
+    const feePolicy = await loadGasFeePolicy();
     const hash = await createWalletClient({ account: relayer, transport: http(config.MONAD_RPC_URL, { timeout: 20_000, retryCount: 0 }) })
-      .sendTransaction({ to: address, value: parseEther("0.02"), ...(await loadGasFeePolicy()).overrides ?? {}, chain: null });
+      .sendTransaction({ to: address, value: parseEther("0.02"), ...(feePolicy.overrides ?? {}), chain: null });
     await publicClient.waitForTransactionReceipt({ hash, timeout: 20_000 });
   } catch (err) {
     throw serviceUnavailable("Could not fund gas. Fund the relayer at the faucet and retry.", "CHAIN_UNAVAILABLE", err);
