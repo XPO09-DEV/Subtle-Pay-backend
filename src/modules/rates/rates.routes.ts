@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { getRates, listCurrencies, quote, tokenPrice } from "./rates.service.js";
+import { getGasPriceInfo } from "../../chain/monad.js";
 
 export async function ratesRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/gas/price", { config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async () => getGasPriceInfo());
+
   app.get("/rates", async (req) => {
     const query = req.query as { currency?: string };
     return getRates(query.currency ?? "USD");

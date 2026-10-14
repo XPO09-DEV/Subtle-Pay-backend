@@ -29,6 +29,18 @@ Set `ANKR_API_KEY` only in the backend environment. It is never returned to clie
 
 Set `COINSTATS_API_KEY` only on the server. The default API origin is `https://openapiv1.coinstats.app`.
 
+### Perpl Gas Pricing
+
+The hackathon backend reads the public Perpl Testnet context at `GET /v1/pub/context` (no Perpl API key required) for its chain gas snapshot. The adapter validates chain ID 10143, coalesces concurrent requests, caches for 15 seconds, marks samples older than 60 seconds stale, and will not use stale values to set transaction fees.
+
+Native MON transfers, token transfers if enabled, and relayer gas top-ups use the Monad RPC fee estimate as the primary signal. A fresh Perpl base-fee / p95-priority sample can provide a bounded second opinion; unreasonable or stale values are ignored. If the RPC fee estimator cannot provide a quote, only a fresh, range-checked Perpl sample is eligible as a fallback. If neither source yields a safe override, viem retains its normal fee selection behavior. This is an estimator for ordinary on-chain transactions, not Perpl's gasless order-forwarding system.
+
+- `GET /gas/price` — network ID, selected fee fields, source and freshness of the Perpl gas snapshot. Public data, rate limited to 30 requests per minute.
+- `PERPL_API_URL` — defaults to `https://testnet.perpl.xyz/api` and is validated against Perpl Testnet so mainnet data cannot be mixed into this build.
+
+Official provider reference: [Perpl API docs](https://github.com/PerplFoundation/api-docs), especially the [Chain / GasPrice types](https://github.com/PerplFoundation/api-docs/blob/main/types.md) and [market-data WebSocket gas-stats stream](https://github.com/PerplFoundation/api-docs/blob/main/websocket.md).
+
+
 ## Account, privacy and exports
 
 The database records account/wallet creation times, authentication events, refresh-session IP/user-agent/time metadata and payments created through this backend. A new versioned migration adds display name plus an optional user-supplied region and consent timestamp. Region is never inferred from IP and is only returned/exported after the user opts in. Publish a privacy notice and define retention before production.
