@@ -1,17 +1,28 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { changePassword, deleteAccount, getMe, login, register, setCurrency, updateProfile } from "./auth.service.js";
+import { changePassword, deleteAccount, getMe, login, register, recordPasskeyLoginSuccess, setCurrency, updateProfile } from "./auth.service.js";
 import { getMpinStatus, setMpin, removeMpin, createPaymentAuthorization } from "./paymentAuth.service.js";
 import { db } from "../../db.js";
 import { getHome } from "./home.js";
 import { currentUser, requireAuth } from "../../middleware/auth.js";
-import { revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.js";
+import { issueSession, revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.js";
 import { audit } from "../../lib/audit.js";
 import { badRequest, unauthorized } from "../../lib/errors.js";
 import { normalizeAccountId, isValidAccountId } from "../../lib/crypto.js";
 import { config } from "../../config.js";
 import { listSupportedCountries, isCountryCode } from "../../lib/countries.js";
 import { changeAlias } from "../alias/alias.service.js";
+import {
+  createPasskeyRegistrationOptions,
+  verifyPasskeyRegistration,
+  createPasskeyLoginOptions,
+  verifyPasskeyLogin,
+  createPasskeyPaymentOptions,
+  verifyPasskeyPayment,
+  listPasskeys,
+  removePasskey,
+} from "./passkey.service.js";
+import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 
 const passwordSchema = z.string().min(1).max(128);
 const registerBody = z.object({ password: passwordSchema });
@@ -26,6 +37,22 @@ const profileBody = z.object({
 }).superRefine((value, ctx) => {
   if (value.shareRegion === true && !value.region?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["region"], message: "Choose a region to share" });
   if (value.region !== undefined && value.shareRegion === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["shareRegion"], message: "Explicit region-sharing consent is required" });
+});
+const passkeyAssertionBody = z.object({
+  challengeId: z.string().uuid(),
+  credential: z.unknown().refine((value) => typeof value === "object" && value !== null, "Invalid passkey response"),
+});
+const passkeyRegistrationBody = z.object({
+  challengeId: z.string().uuid(),
+  credential: z.unknown().refine((value) => typeof value === "object" && value !== null, "Invalid passkey registration response"),
+  deviceName: z.string().trim().min(1).max(60).optional(),
+});
+const paymentIntentSchema = z.object({
+  to: z.string().trim().min(2).max(64),
+  amount: z.union([z.string(), z.number()]),
+  amountCurrency: z.string().length(3),
+  note: z.string().max(140).optional(),
+  asset: z.string().max(8).optional(),
 });
 const refreshBody = z.object({ refreshToken: z.string().min(20).max(128).optional() }).default({});
 const REFRESH_COOKIE = "subtlepay_refresh";
@@ -61,6 +88,12 @@ function meta(req: { id: string; ip: string; headers: { "user-agent"?: string | 
   const ua = req.headers["user-agent"];
   return { ip: req.ip, userAgent: (Array.isArray(ua) ? ua[0] : ua)?.slice(0, 512), requestId: req.id };
 }
+async function issueSessionForPasskeyLogin(userId: string, req: { id: string; ip: string; headers: { "user-agent"?: string | string[] } }, reply: { header(name: string, value: string | string[]): unknown }) {
+  const session = await issueSession(userId, meta(req));
+  recordPasskeyLoginSuccess(userId, meta(req));
+  reply.header("set-cookie", [refreshCookie(session.refreshToken), savedRefreshCookie(userId, session.refreshToken)]);
+  return { token: session.accessToken, expiresIn: session.accessTokenExpiresIn };
+}
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/register", { config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req, reply) => {
     const body = registerBody.parse(req.body);
@@ -74,6 +107,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const accountId = normalizeAccountId(body.accountId);
     reply.header("set-cookie", [refreshCookie(result.refreshToken), savedRefreshCookie(accountId, result.refreshToken)]);
     return { token: result.token, expiresIn: result.expiresIn };
+  });
+  app.post("/auth/passkeys/authentication/options", { config: { rateLimit: { max: 8, timeWindow: 60_000 } } }, async (req) => {
+    const body = z.object({ accountId: z.string().min(10).max(40) }).parse(req.body);
+    return createPasskeyLoginOptions(body.accountId);
+  });
+  app.post("/auth/passkeys/authentication/verify", { config: { rateLimit: { max: 8, timeWindow: 60_000 } } }, async (req, reply) => {
+    const body = passkeyAssertionBody.parse(req.body);
+    const verified = await verifyPasskeyLogin(body.challengeId, body.credential as AuthenticationResponseJSON, req.ip);
+    const session = await issueSessionForPasskeyLogin(verified.userId, req, reply);
+    return { token: session.token, expiresIn: session.expiresIn };
   });
   app.post("/auth/switch-saved", { config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (req, reply) => {
     const body = z.object({ accountId: z.string().length(27) }).parse(req.body);
@@ -115,6 +158,28 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/change-password", { preHandler: requireAuth }, async (req) => {
     const user = currentUser(req); const body = changeBody.parse(req.body);
     return changePassword(user.id, user.sessionId, body.oldPassword, body.newPassword, req.ip);
+  });
+  app.get("/auth/passkeys", { preHandler: requireAuth }, async (req) => ({
+    credentials: listPasskeys(currentUser(req).id),
+  }));
+  app.post("/auth/passkeys/registration/options", { preHandler: requireAuth, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req) => {
+    const body = z.object({ currentPassword: passwordSchema }).parse(req.body);
+    return createPasskeyRegistrationOptions(currentUser(req).id, body.currentPassword);
+  });
+  app.post("/auth/passkeys/registration/verify", { preHandler: requireAuth, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req) => {
+    const body = passkeyRegistrationBody.parse(req.body);
+    return verifyPasskeyRegistration(
+      currentUser(req).id,
+      body.challengeId,
+      body.credential as RegistrationResponseJSON,
+      body.deviceName,
+      req.ip,
+    );
+  });
+  app.delete("/auth/passkeys/:credentialId", { preHandler: requireAuth, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req) => {
+    const params = z.object({ credentialId: z.string().min(16).max(2048) }).parse(req.params);
+    const body = z.object({ currentPassword: passwordSchema }).parse(req.body);
+    return removePasskey(currentUser(req).id, params.credentialId, body.currentPassword, req.ip);
   });
   app.get("/meta/countries", async () => ({ countries: listSupportedCountries() }));
   app.get("/me", { preHandler: requireAuth }, async (req) => getMe(currentUser(req).id));
@@ -164,14 +229,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({ currentPassword: passwordSchema }).parse(req.body);
     return removeMpin(currentUser(req).id, body.currentPassword, req.ip);
   });
+  app.post("/auth/passkeys/payment/options", { preHandler: requireAuth, config: { rateLimit: { max: 8, timeWindow: 60_000 } } }, async (req) => {
+    const body = z.object({ intent: paymentIntentSchema }).parse(req.body);
+    return createPasskeyPaymentOptions(currentUser(req).id, body.intent,);
+  });
+  app.post("/auth/passkeys/payment/verify", { preHandler: requireAuth, config: { rateLimit: { max: 8, timeWindow: 60_000 } } }, async (req) => {
+    const body = passkeyAssertionBody.parse(req.body);
+    return verifyPasskeyPayment(currentUser(req).id, body.challengeId, body.credential as AuthenticationResponseJSON, req.ip);
+  });
   app.post("/auth/payment-authorization", { preHandler: requireAuth, config: { rateLimit: { max: 8, timeWindow: 60_000 } } }, async (req) => {
-    const intentSchema = z.object({
-      to: z.string().trim().min(2).max(64),
-      amount: z.union([z.string(), z.number()]),
-      amountCurrency: z.string().length(3),
-      note: z.string().max(140).optional(),
-      asset: z.string().max(8).optional(),
-    });
+    const intentSchema = paymentIntentSchema;
     const body = z.discriminatedUnion("method", [
       z.object({ method: z.literal("password"), secret: passwordSchema, intent: intentSchema.optional() }),
       z.object({ method: z.literal("mpin"), secret: z.string().regex(/^\d{6}$/), intent: intentSchema.optional() }),
