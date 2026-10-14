@@ -62,7 +62,7 @@ function rawAmount(value: unknown, name: string): string {
 }
 
 async function loadContext(): Promise<CachedSnapshot> {
-  const response = await fetch(config.PERPL_API_URL + "/v1/pub/context", {
+  const response = await fetch(config.PERPL_API_URL.replace(/\/+$/, "") + "/v1/pub/context", {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(3_500),
   });
