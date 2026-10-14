@@ -22,5 +22,7 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm install --no-audit --no-fund
+      - name: Check local bootstrap script syntax
+        run: node --check scripts/ensure-local-env.mjs
       - name: Type-check backend
         run: npm run typecheck
