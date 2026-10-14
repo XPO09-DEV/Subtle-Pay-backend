@@ -9,15 +9,18 @@ import { revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.
 import { audit } from "../../lib/audit.js";
 import { badRequest, unauthorized } from "../../lib/errors.js";
 import { config } from "../../config.js";
+import { listSupportedCountries, isCountryCode } from "../../lib/countries.js";
+import { changeAlias } from "../alias/alias.service.js";
 
 const passwordSchema = z.string().min(1).max(128);
 const registerBody = z.object({ password: passwordSchema });
 const loginBody = z.object({ accountId: z.string().min(10).max(40), password: passwordSchema });
 const changeBody = z.object({ oldPassword: passwordSchema, newPassword: passwordSchema });
-const currencyBody = z.object({ currency: z.string().length(3) });
+const currencyBody = z.object({ currency: z.string().length(3), currentPassword: passwordSchema });
 const profileBody = z.object({
   displayName: z.union([z.string().trim().max(80), z.null()]).optional(),
   region: z.union([z.string().trim().min(1).max(80), z.null()]).optional(),
+  country: z.union([z.string().length(2).refine(isCountryCode), z.null()]).optional(),
   shareRegion: z.boolean().optional(),
 }).superRefine((value, ctx) => {
   if (value.shareRegion === true && !value.region?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["region"], message: "Choose a region to share" });
@@ -86,7 +89,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const user = currentUser(req); const body = changeBody.parse(req.body);
     return changePassword(user.id, user.sessionId, body.oldPassword, body.newPassword, req.ip);
   });
+  app.get("/meta/countries", async () => ({ countries: listSupportedCountries() }));
   app.get("/me", { preHandler: requireAuth }, async (req) => getMe(currentUser(req).id));
+  app.put("/me/alias", { preHandler: requireAuth, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req) => {
+    const body = z.object({ alias: z.string().min(3).max(24), currentPassword: passwordSchema }).parse(req.body);
+    const user = currentUser(req);
+    return changeAlias(user.id, body.alias, body.currentPassword, req.ip);
+  });
 
   app.get("/me/login-events", { preHandler: requireAuth, config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (req) => {
     const query = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query);
@@ -156,7 +165,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
   app.put("/me/currency", { preHandler: requireAuth }, async (req) => {
     const body = currencyBody.parse(req.body);
-    return setCurrency(currentUser(req).id, body.currency);
+    return setCurrency(currentUser(req).id, body.currency, body.currentPassword);
   });
   app.put("/me/profile", { preHandler: requireAuth }, async (req) => {
     const body = profileBody.parse(req.body);
