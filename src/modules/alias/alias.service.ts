@@ -27,6 +27,8 @@ export function claimAlias(userId: string, raw: string, ip?: string): { alias: s
   if (taken && taken.user_id !== userId) {
     throw conflict("That name is already taken", "ALIAS_TAKEN");
   }
+  const retired = db.prepare("SELECT user_id FROM alias_history WHERE alias = ?").get(alias) as { user_id: string } | undefined;
+  if (retired) throw conflict("That handle was previously used and is reserved for its original account", "ALIAS_RESERVED");
 
   const mine = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as { alias: string } | undefined;
   const now = Date.now();
@@ -47,7 +49,7 @@ export async function changeAlias(userId: string, raw: string, currentPassword: 
   if (retired) throw conflict("That handle has been retired and cannot be reassigned", "ALIAS_RESERVED");
   const mine = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as { alias: string } | undefined;
   const previousAlias = mine?.alias ?? null;
-  if (previousAlias === alias) return { alias, previousAlias };
+  if (previousAlias === alias) return { alias, previousAlias: null };
   db.transaction(() => {
     if (previousAlias) {
       db.prepare("INSERT INTO alias_history (alias, user_id, created_at, replaced_at) VALUES (?, ?, ?, ?)")
