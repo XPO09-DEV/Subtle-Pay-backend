@@ -4,6 +4,7 @@ import { db } from "../db.js";
 const VERSION = 10;
 const NAME = "transaction_gas_metadata";
 const SQL = `
+  ALTER TABLE transactions ADD COLUMN asset TEXT NOT NULL DEFAULT 'MON' CHECK (asset IN ('MON','USDC'));
   ALTER TABLE transactions ADD COLUMN gas_used TEXT;
   ALTER TABLE transactions ADD COLUMN effective_gas_price_wei TEXT;
   ALTER TABLE transactions ADD COLUMN fee_paid_wei TEXT;
