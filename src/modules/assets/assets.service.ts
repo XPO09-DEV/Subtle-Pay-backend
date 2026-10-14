@@ -1,17 +1,22 @@
+import { config } from "../../config.js";
 import { unprocessable } from "../../lib/errors.js";
 
+export type PayAssetCode = "MON" | "USDC";
 export interface PayAsset {
-  code: "MON";
+  code: PayAssetCode;
   name: string;
   chain: "monad-testnet";
   settles: true;
 }
-/** This build deliberately exposes only the native Monad Testnet token. */
+/** Only assets with an explicit server-side settlement path are payable. */
 export function listAssets(): PayAsset[] {
-  return [{ code: "MON", name: "Monad Testnet MON", chain: "monad-testnet", settles: true }];
+  const assets: PayAsset[] = [{ code: "MON", name: "Monad Testnet MON", chain: "monad-testnet", settles: true }];
+  if (config.STABLE_TOKEN_ADDRESS) assets.push({ code: "USDC", name: "Configured Monad Testnet USDC", chain: "monad-testnet", settles: true });
+  return assets;
 }
-export function assertPayableAsset(code: string | undefined): PayAsset["code"] {
+export function assertPayableAsset(code: string | undefined): PayAssetCode {
   const asset = (code ?? "MON").trim().toUpperCase();
-  if (asset !== "MON") throw unprocessable("Only free native MON on Monad Testnet (chain ID 10143) is enabled in this hackathon build.", "CHAIN_UNAVAILABLE");
-  return "MON";
+  if (asset === "MON") return "MON";
+  if (asset === "USDC" && config.STABLE_TOKEN_ADDRESS) return "USDC";
+  throw unprocessable("This asset has no configured settlement contract on Monad Testnet. Only MON and configured USDC are payable.", "CHAIN_UNAVAILABLE");
 }
