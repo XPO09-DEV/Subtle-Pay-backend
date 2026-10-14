@@ -183,7 +183,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({ currentPassword: passwordSchema, confirmation: z.literal("DELETE") }).parse(req.body);
     const user = currentUser(req);
     const result = await deleteAccount(user.id, body.currentPassword, req.ip);
-    reply.header("set-cookie", refreshCookie("", true));
+    reply.header("set-cookie", [refreshCookie("", true), savedRefreshCookie(user.id, "", true)]);
     return result;
   });
   app.get("/home", { preHandler: requireAuth }, async (req) => {
