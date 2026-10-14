@@ -149,7 +149,10 @@ async function resolveDestination(to: string, ownerId?: string): Promise<{ addre
     return { address: row?.address ?? raw, userId: row?.user_id ?? null };
   }
   const alias = normalizeAlias(raw);
-  const row = db.prepare(`SELECT a.user_id, w.address FROM aliases a JOIN wallets w ON w.user_id = a.user_id WHERE a.alias = ?`).get(alias) as { user_id: string; address: string } | undefined;
+  const row = db.prepare(`SELECT a.user_id, w.address FROM aliases a JOIN wallets w ON w.user_id = a.user_id WHERE a.alias = ?
+    UNION ALL
+    SELECT h.user_id, w.address FROM alias_history h JOIN wallets w ON w.user_id = h.user_id WHERE h.alias = ? LIMIT 1`)
+    .get(alias, alias) as { user_id: string; address: string } | undefined;
   if (!row) throw notFound("No account uses that name", "ALIAS_NOT_FOUND");
   return { address: row.address, userId: row.user_id };
 }
