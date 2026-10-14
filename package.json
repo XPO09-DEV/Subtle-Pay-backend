@@ -7,8 +7,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "dev": "node scripts/ensure-local-env.mjs && tsx watch src/server.ts",
+    "start": "node scripts/ensure-local-env.mjs && tsx src/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
