@@ -42,7 +42,7 @@ export async function getWalletView(userId: string, force = false) {
     const currency = user.currency as Currency;
     const address = wallet.address as Address;
     const [rates, nativeWei, stableRaw, holds] = await Promise.all([
-      getRates(currency), getNativeBalance(address), getTokenBalance(address),
+      getRates(currency), getNativeBalance(address), getTokenBalance(address).catch(() => null),
       Promise.resolve(db.prepare("SELECT asset, amount_atomic FROM fund_holds WHERE user_id = ? AND status = 'active'").all(userId) as Array<{ asset: string; amount_atomic: string }>),
     ]);
     const reservedWei = holds.filter((row) => row.asset === "MON").reduce((total, row) => total + BigInt(row.amount_atomic), 0n);
