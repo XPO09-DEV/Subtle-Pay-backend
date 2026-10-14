@@ -8,6 +8,7 @@ import { migrateTracking } from "./migrations/005-login-fund-holds-transaction-e
 import { migrateWalletFeatures } from "./migrations/006-wallet-security-and-merchants.js";
 import { migratePaymentAuthorizationIntent } from "./migrations/007-payment-authorization-intent.js";
 import { migrateAccountSettingsExtensions } from "./migrations/008-account-settings-extensions.js";
+import { migrateWebAuthnPasskeys } from "./migrations/009-webauthn-passkeys.js";
 import { errorHandler, notFoundHandler } from "./lib/errors.js";
 import { initPassword } from "./lib/password.js";
 import { kmsSelfTest } from "./lib/kms.js";
@@ -34,6 +35,7 @@ migrateTracking();
 migrateWalletFeatures();
 migratePaymentAuthorizationIntent();
 migrateAccountSettingsExtensions();
+migrateWebAuthnPasskeys();
 
 const app = Fastify({
   logger: {
@@ -41,7 +43,7 @@ const app = Fastify({
     transport: isProd ? undefined : { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } },
   },
   trustProxy: isProd,
-  bodyLimit: 16 * 1024,
+  bodyLimit: 64 * 1024,
   requestIdHeader: "x-request-id",
 });
 app.setErrorHandler(errorHandler);

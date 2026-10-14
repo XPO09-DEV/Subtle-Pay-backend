@@ -105,6 +105,12 @@ export async function changePassword(userId: string, sessionId: string, oldPassw
   audit(userId, "auth.password_changed", undefined, ip);
   return { ok: true };
 }
+export function recordPasskeyLoginSuccess(userId: string, meta: SessionMeta): void {
+  recordLoginSuccess(userId);
+  recordLoginEvent({ accountId: userId, attemptedId: userId, success: true, reason: "success", meta });
+  audit(userId, "auth.passkey_login", undefined, meta.ip);
+}
+
 export function getMe(userId: string) {
   const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at, country, created_at FROM users WHERE id = ? AND deleted_at IS NULL").get(userId) as
     | { id: string; currency: string; display_name: string | null; region: string | null; region_consent_at: number | null; country: string | null; created_at: number } | undefined;
@@ -190,6 +196,8 @@ export async function deleteAccount(userId: string, currentPassword: string, ip?
     db.prepare("DELETE FROM alias_history WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM wallet_qr WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM pin_credentials WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM webauthn_credentials WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM webauthn_challenges WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM payment_authorizations WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM merchant_autopay_applications WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM merchant_profiles WHERE user_id = ?").run(userId);

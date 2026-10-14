@@ -5,6 +5,7 @@ import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
 import { badRequest, unauthorized, tooManyRequests } from "../../lib/errors.js";
 import { verifyPassword } from "../../lib/password.js";
+import { assertCurrency, parseAmountMinor, parseUsdToMicro } from "../../lib/currency.js";
 
 const pinPepper = Buffer.from(config.PASSWORD_PEPPER, "hex");
 const pinOptions = {
@@ -56,6 +57,22 @@ export type PaymentIntent = {
   asset?: string;
 };
 
+function validatePaymentIntent(intent: PaymentIntent): void {
+  if (!intent.to.trim() || intent.to.trim().length > 64) {
+    throw badRequest("A valid recipient and positive amount are required for payment authorization.");
+  }
+  const currency = assertCurrency(intent.amountCurrency);
+  const amountText = String(intent.amount).trim();
+  const amountUnits = currency === "USD" ? parseUsdToMicro(amountText) : parseAmountMinor(amountText, currency);
+  if (!Number.isSafeInteger(amountUnits) || amountUnits <= 0) {
+    throw badRequest("A valid recipient and positive amount are required for payment authorization.");
+  }
+  if (intent.note && intent.note.length > 140) throw badRequest("Note is too long.");
+  if ((intent.asset ?? "MON").trim().toUpperCase() !== "MON") {
+    throw badRequest("Only native MON is supported on Monad Testnet.");
+  }
+}
+
 function paymentIntentHash(intent: PaymentIntent): string {
   return sha256Hex(JSON.stringify({
     to: intent.to.trim().toLowerCase(),
@@ -66,24 +83,30 @@ function paymentIntentHash(intent: PaymentIntent): string {
   }));
 }
 
+/** Validate once and use this hash on the challenge and the one-time payment token. */
+export function getPaymentIntentHash(intent: PaymentIntent): string {
+  validatePaymentIntent(intent);
+  return paymentIntentHash(intent);
+}
+
+/** Called only after a fresh, verified WebAuthn assertion bound to this exact intent. */
+export function issuePasskeyPaymentAuthorizationForIntent(userId: string, intentHash: string, ip?: string): { authorizationToken: string; expiresIn: number } {
+  if (!/^[a-f0-9]{64}$/.test(intentHash)) throw unauthorized("A valid payment-bound passkey assertion is required.", "PAYMENT_AUTH_REQUIRED");
+  const now = Date.now();
+  const token = randomToken(32);
+  db.prepare("INSERT INTO payment_authorizations (token_hash, user_id, expires_at, created_at, intent_hash) VALUES (?, ?, ?, ?, ?)")
+    .run(sha256Hex(token), userId, now + 120_000, now, intentHash);
+  audit(userId, "payment.authorized", { method: "passkey", expiresInSeconds: 120 }, ip);
+  return { authorizationToken: token, expiresIn: 120 };
+}
+
 export async function createPaymentAuthorization(
   userId: string,
   factor: { method: "password"; secret: string } | { method: "mpin"; secret: string },
   ip?: string,
   intent?: PaymentIntent
 ) {
-  if (intent) {
-    const amount = Number(intent.amount);
-    if (!intent.to.trim() || !Number.isFinite(amount) || amount <= 0) {
-      throw badRequest("A valid recipient and positive amount are required for payment authorization.");
-    }
-    if (!["USD", "INR"].includes(intent.amountCurrency.toUpperCase())) {
-      throw badRequest("Payment currency must be USD or INR.");
-    }
-    if ((intent.asset ?? "MON").toUpperCase() !== "MON") {
-      throw badRequest("Only native MON is supported on Monad Testnet.");
-    }
-  }
+  if (intent) validatePaymentIntent(intent);
   const now = Date.now();
   let valid = false;
   if (factor.method === "password") {
