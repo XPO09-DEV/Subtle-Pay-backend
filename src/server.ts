@@ -7,6 +7,7 @@ import { closeDb } from "./db.js";
 import { migrateTracking } from "./migrations/005-login-fund-holds-transaction-events.js";
 import { migrateWalletFeatures } from "./migrations/006-wallet-security-and-merchants.js";
 import { migratePaymentAuthorizationIntent } from "./migrations/007-payment-authorization-intent.js";
+import { migrateAccountSettingsExtensions } from "./migrations/008-account-settings-extensions.js";
 import { errorHandler, notFoundHandler } from "./lib/errors.js";
 import { initPassword } from "./lib/password.js";
 import { kmsSelfTest } from "./lib/kms.js";
@@ -32,6 +33,7 @@ import { merchantRoutes } from "./modules/merchant/merchant.routes.js";
 migrateTracking();
 migrateWalletFeatures();
 migratePaymentAuthorizationIntent();
+migrateAccountSettingsExtensions();
 
 const app = Fastify({
   logger: {
