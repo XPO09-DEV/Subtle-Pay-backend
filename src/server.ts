@@ -43,7 +43,7 @@ const app = Fastify({
     transport: isProd ? undefined : { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } },
   },
   trustProxy: isProd,
-  bodyLimit: 16 * 1024,
+  bodyLimit: 64 * 1024,
   requestIdHeader: "x-request-id",
 });
 app.setErrorHandler(errorHandler);
