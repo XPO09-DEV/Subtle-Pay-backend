@@ -243,3 +243,25 @@ export async function getReceiptStatus(hash: Hash): Promise<"confirmed" | "faile
   try { await assertMonadTestnet(); const receipt = await publicClient.getTransactionReceipt({ hash }); return receipt.status === "success" ? "confirmed" : "failed"; }
   catch { return null; }
 }
+
+
+/** Read confirmed on-chain execution cost. Returns null until a receipt is available. */
+export async function getTransactionFeeDetails(hash: Hash): Promise<{
+  gasUsed: string;
+  effectiveGasPriceWei: string;
+  feePaidWei: string;
+} | null> {
+  try {
+    await assertMonadTestnet();
+    const receipt = await publicClient.getTransactionReceipt({ hash });
+    const effectiveGasPrice = receipt.effectiveGasPrice;
+    if (typeof effectiveGasPrice !== "bigint" || receipt.gasUsed < 0n) return null;
+    return {
+      gasUsed: receipt.gasUsed.toString(),
+      effectiveGasPriceWei: effectiveGasPrice.toString(),
+      feePaidWei: (receipt.gasUsed * effectiveGasPrice).toString(),
+    };
+  } catch {
+    return null;
+  }
+}

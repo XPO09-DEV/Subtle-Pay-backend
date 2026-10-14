@@ -1,6 +1,6 @@
 import { isAddress } from "viem";
 import { config } from "../../config.js";
-import { formatMon, formatToken, getNativeBalance, getTokenBalance, getReceiptStatus, sendNative, sendToken, waitConfirmed } from "../../chain/monad.js";
+import { formatMon, formatToken, getNativeBalance, getTokenBalance, getReceiptStatus, getTransactionFeeDetails, sendNative, sendToken, waitConfirmed } from "../../chain/monad.js";
 import { db, withTransaction, type TransactionRow } from "../../db.js";
 import { canonicalJson, newId } from "../../lib/crypto.js";
 import { assertPaymentWithinLimits, localMinorToUsdMicro, microToDecimalString, minorToDecimalString, parseAmountMinor, parseUsdToMicro, usdMicroToLocalMinor, type Currency } from "../../lib/currency.js";
@@ -27,7 +27,7 @@ function parseAmount(amount: string | number, currency: Currency): number {
 export async function sendPayment(userId: string, input: { to: string; amount: string | number; amountCurrency: string; note?: string; asset?: string }, ip?: string) {
   return exclusive(userId, async () => {
     const requestedAsset = (input.asset ?? "MON").trim().toUpperCase();
-    if (requestedAsset !== "MON") throw unprocessable("Hackathon payments are restricted to native MON on Monad Testnet. Other displayed assets are not transferable in this build.", "CHAIN_UNAVAILABLE");
+    if (requestedAsset !== "MON" && !(requestedAsset === "USDC" && config.STABLE_TOKEN_ADDRESS)) throw unprocessable("Only MON and explicitly configured USDC can be transferred on Monad Testnet.", "CHAIN_UNAVAILABLE");
     if (config.MONAD_CHAIN_ID !== 10143) throw unprocessable("Native MON payments are locked to Monad Testnet (chain ID 10143) for this hackathon build.", "CHAIN_UNAVAILABLE");
     const currency = input.amountCurrency.trim().toUpperCase() as Currency;
     const displayMinorOrMicro = parseAmount(input.amount, currency);
@@ -38,8 +38,8 @@ export async function sendPayment(userId: string, input: { to: string; amount: s
     const from = getWalletRow(userId);
     const dest = await resolveDestination(input.to, userId);
     if (dest.address.toLowerCase() === from.address.toLowerCase()) throw unprocessable("You cannot pay yourself", "SELF_PAYMENT");
-    // Native-only settlement for this hackathon, even if an optional token is configured.
-    const stable = false;
+    // Only native MON and the explicitly configured six-decimal stable token are supported.
+    const stable = requestedAsset === "USDC";
     const tokenBase = stable ? BigInt(usdMicro) : monWei(usdMicro, rates.tokenUsd);
     if (tokenBase <= 0n) throw badRequest("Amount is too small", "INVALID_AMOUNT");
     const balance = stable ? await getTokenBalance(from.address as `0x${string}`) : await getNativeBalance(from.address as `0x${string}`);
@@ -48,21 +48,22 @@ export async function sendPayment(userId: string, input: { to: string; amount: s
     const txId = newId();
     const now = Date.now();
     withTransaction(() => {
-      const active = db.prepare("SELECT amount_atomic FROM fund_holds WHERE user_id = ? AND asset = 'MON' AND status = 'active'")
-        .all(userId) as Array<{ amount_atomic: string }>;
+      const holdAsset = stable ? "USDC" : "MON";
+      const active = db.prepare("SELECT amount_atomic FROM fund_holds WHERE user_id = ? AND asset = ? AND status = 'active'")
+        .all(userId, holdAsset) as Array<{ amount_atomic: string }>;
       const reserved = active.reduce((total, row) => total + BigInt(row.amount_atomic), 0n);
       if (balance < reserved + tokenBase) throw insufficientFunds();
       db.prepare(`INSERT INTO transactions
-        (id, from_user, to_user, from_address, to_address, amount_micro, display_currency, fx_rate, status, note, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`)
-        .run(txId, userId, dest.userId, from.address, dest.address, usdMicro, currency, rates.usdLocal, input.note ?? null, now, now);
+        (id, from_user, to_user, from_address, to_address, amount_micro, display_currency, fx_rate, status, note, created_at, updated_at, asset)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`)
+        .run(txId, userId, dest.userId, from.address, dest.address, usdMicro, currency, rates.usdLocal, input.note ?? null, now, now, requestedAsset);
       db.prepare(`INSERT INTO fund_holds (id, transaction_id, user_id, asset, amount_atomic, amount_micro, status, created_at)
-        VALUES (?, ?, ?, 'MON', ?, ?, 'active', ?)`)
-        .run(newId(), txId, userId, tokenBase.toString(), usdMicro, now);
+        VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`)
+        .run(newId(), txId, userId, holdAsset, tokenBase.toString(), usdMicro, now);
       db.prepare(`INSERT INTO transaction_events (id, transaction_id, status, metadata, event_at) VALUES (?, ?, 'pending', ?, ?)`)
-        .run(newId(), txId, canonicalJson({ asset: "MON", amountMicro: usdMicro }), now);
+        .run(newId(), txId, canonicalJson({ asset: requestedAsset, amountMicro: usdMicro }), now);
     });
-    audit(userId, "payment.hold_created", { txId, asset: "MON", amountMicro: usdMicro }, ip);
+    audit(userId, "payment.hold_created", { txId, asset: requestedAsset, amountMicro: usdMicro }, ip);
     invalidateWalletView(userId);
 
     let submittedHash: `0x${string}` | null = null;
@@ -79,10 +80,11 @@ export async function sendPayment(userId: string, input: { to: string; amount: s
       });
       audit(userId, "payment.submitted", { txId, txHash: submittedHash }, ip);
       const observedStatus = await waitConfirmed(submittedHash);
+      const feeDetails = await getTransactionFeeDetails(submittedHash);
       const finalizedAt = Date.now();
       withTransaction(() => {
-        db.prepare("UPDATE transactions SET status = ?, failure_reason = ?, updated_at = ?, confirmed_at = ? WHERE id = ?")
-          .run(observedStatus, observedStatus === "failed" ? "chain_reverted" : null, finalizedAt, observedStatus === "confirmed" ? finalizedAt : null, txId);
+        db.prepare("UPDATE transactions SET status = ?, failure_reason = ?, updated_at = ?, confirmed_at = ?, gas_used = ?, effective_gas_price_wei = ?, fee_paid_wei = ? WHERE id = ?")
+          .run(observedStatus, observedStatus === "failed" ? "chain_reverted" : null, finalizedAt, observedStatus === "confirmed" ? finalizedAt : null, feeDetails?.gasUsed ?? null, feeDetails?.effectiveGasPriceWei ?? null, feeDetails?.feePaidWei ?? null, txId);
         if (observedStatus === "confirmed" || observedStatus === "failed") {
           db.prepare("UPDATE fund_holds SET status = 'released', released_at = ?, release_reason = ? WHERE transaction_id = ? AND status = 'active'")
             .run(finalizedAt, observedStatus, txId);
@@ -94,7 +96,7 @@ export async function sendPayment(userId: string, input: { to: string; amount: s
       audit(userId, observedStatus === "confirmed" ? "payment.confirmed" : observedStatus === "failed" ? "payment.failed" : "payment.confirmation_pending", { txId, status: observedStatus }, ip);
       if (observedStatus === "confirmed" || observedStatus === "failed") audit(userId, "payment.hold_released", { txId, reason: observedStatus }, ip);
       audit(userId, "payment.send", { txId, status: observedStatus, usdMicro }, ip);
-      return { txId, status: observedStatus, tokenAmount: stable ? formatToken(tokenBase, 6) : formatMon(tokenBase), usdValue: microToDecimalString(usdMicro), txHash: submittedHash };
+      return { txId, status: observedStatus, tokenAmount: stable ? formatToken(tokenBase, 6) : formatMon(tokenBase), usdValue: microToDecimalString(usdMicro), txHash: submittedHash, asset: requestedAsset as "MON" | "USDC", gasUsed: feeDetails?.gasUsed ?? null, effectiveGasPriceWei: feeDetails?.effectiveGasPriceWei ?? null, feePaidWei: feeDetails?.feePaidWei ?? null, feePaidMon: feeDetails ? formatMon(BigInt(feeDetails.feePaidWei)) : null };
     } catch (err) {
       const failedAt = Date.now();
       if (submittedHash) {
@@ -107,7 +109,7 @@ export async function sendPayment(userId: string, input: { to: string; amount: s
         });
         invalidateWalletView(userId);
         audit(userId, "payment.confirmation_pending", { txId }, ip);
-        return { txId, status: "submitted" as const, tokenAmount: stable ? formatToken(tokenBase, 6) : formatMon(tokenBase), usdValue: microToDecimalString(usdMicro), txHash: submittedHash };
+        return { txId, status: "submitted" as const, tokenAmount: stable ? formatToken(tokenBase, 6) : formatMon(tokenBase), usdValue: microToDecimalString(usdMicro), txHash: submittedHash, asset: requestedAsset as "MON" | "USDC", gasUsed: null, effectiveGasPriceWei: null, feePaidWei: null, feePaidMon: null };
       }
       withTransaction(() => {
         db.prepare("UPDATE transactions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?").run("chain_submission_failed", failedAt, txId);
@@ -211,7 +213,10 @@ export function listPayments(userId: string, options: {
       counterparty: counterpartyAlias ?? counterpartyAddress,
       counterpartyAddress, counterpartyAlias,
       counterpartyIsMerchant: Boolean(counterpartyMerchantName), counterpartyMerchantName,
+      asset: row.asset ?? "MON",
       usdValue: microToDecimalString(row.amount_micro), localValue: minorToDecimalString(localMinor, row.display_currency as Currency),
+      gasUsed: row.gas_used, effectiveGasPriceWei: row.effective_gas_price_wei, feePaidWei: row.fee_paid_wei,
+      feePaidMon: row.fee_paid_wei ? formatMon(BigInt(row.fee_paid_wei)) : null,
       displayCurrency: row.display_currency, status: row.status, txHash: row.tx_hash, note: row.note,
       confirmedAt: row.confirmed_at, updatedAt: row.updated_at, createdAt: new Date(row.created_at).toISOString(),
     };
@@ -227,12 +232,13 @@ export async function reconcileSubmittedPayments(limit = 50): Promise<number> {
   for (const row of rows) {
     const status = await getReceiptStatus(row.tx_hash as `0x${string}`);
     if (!status) continue;
+    const feeDetails = await getTransactionFeeDetails(row.tx_hash as `0x${string}`);
     const now = Date.now();
     const changes = withTransaction(() => {
       const current = db.prepare("SELECT status FROM transactions WHERE id = ?").get(row.id) as { status: string } | undefined;
       if (!current || current.status !== "submitted") return false;
-      db.prepare("UPDATE transactions SET status = ?, failure_reason = ?, updated_at = ?, confirmed_at = ? WHERE id = ?")
-        .run(status, status === "failed" ? "chain_reverted" : null, now, status === "confirmed" ? now : null, row.id);
+      db.prepare("UPDATE transactions SET status = ?, failure_reason = ?, updated_at = ?, confirmed_at = ?, gas_used = ?, effective_gas_price_wei = ?, fee_paid_wei = ? WHERE id = ?")
+        .run(status, status === "failed" ? "chain_reverted" : null, now, status === "confirmed" ? now : null, feeDetails?.gasUsed ?? null, feeDetails?.effectiveGasPriceWei ?? null, feeDetails?.feePaidWei ?? null, row.id);
       db.prepare("UPDATE fund_holds SET status = 'released', released_at = ?, release_reason = ? WHERE transaction_id = ? AND status = 'active'").run(now, status, row.id);
       db.prepare(`INSERT INTO transaction_events (id, transaction_id, status, tx_hash, failure_code, event_at) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(newId(), row.id, status, row.tx_hash, status === "failed" ? "CHAIN_REVERTED" : null, now);
