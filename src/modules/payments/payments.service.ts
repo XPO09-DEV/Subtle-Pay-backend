@@ -230,11 +230,11 @@ export async function reconcileSubmittedPayments(limit = 50): Promise<number> {
   for (const row of rows) {
     const status = await getReceiptStatus(row.tx_hash as `0x${string}`);
     if (!status) continue;
+    const feeDetails = await getTransactionFeeDetails(row.tx_hash as `0x${string}`);
     const now = Date.now();
     const changes = withTransaction(() => {
       const current = db.prepare("SELECT status FROM transactions WHERE id = ?").get(row.id) as { status: string } | undefined;
       if (!current || current.status !== "submitted") return false;
-      const feeDetails = await getTransactionFeeDetails(row.tx_hash as `0x${string}`);
       db.prepare("UPDATE transactions SET status = ?, failure_reason = ?, updated_at = ?, confirmed_at = ?, gas_used = ?, effective_gas_price_wei = ?, fee_paid_wei = ? WHERE id = ?")
         .run(status, status === "failed" ? "chain_reverted" : null, now, status === "confirmed" ? now : null, feeDetails?.gasUsed ?? null, feeDetails?.effectiveGasPriceWei ?? null, feeDetails?.feePaidWei ?? null, row.id);
       db.prepare("UPDATE fund_holds SET status = 'released', released_at = ?, release_reason = ? WHERE transaction_id = ? AND status = 'active'").run(now, status, row.id);
