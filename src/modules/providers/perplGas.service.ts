@@ -75,7 +75,7 @@ async function loadContext(): Promise<CachedSnapshot> {
   const gas = record(chain.gas);
   if (!gas) throw new Error("Perpl context did not include a gas snapshot.");
   const at = record(gas.at);
-  const sampledAtMs = typeof at?.t === "number" && Number.isFinite(at.t) && at.t > 0
+  const sampledAtMs = typeof at?.t === "number" && Number.isFinite(at.t) && at.t > 0 && at.t <= 8.64e15
     ? at.t
     : null;
   const base = rawAmount(gas.base, "base fee");
