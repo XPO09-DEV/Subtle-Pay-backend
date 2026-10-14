@@ -8,6 +8,7 @@ import { migrateTracking } from "./migrations/005-login-fund-holds-transaction-e
 import { migrateWalletFeatures } from "./migrations/006-wallet-security-and-merchants.js";
 import { migratePaymentAuthorizationIntent } from "./migrations/007-payment-authorization-intent.js";
 import { migrateAccountSettingsExtensions } from "./migrations/008-account-settings-extensions.js";
+import { migrateWebAuthnPasskeys } from "./migrations/009-webauthn-passkeys.js";
 import { errorHandler, notFoundHandler } from "./lib/errors.js";
 import { initPassword } from "./lib/password.js";
 import { kmsSelfTest } from "./lib/kms.js";
@@ -34,6 +35,7 @@ migrateTracking();
 migrateWalletFeatures();
 migratePaymentAuthorizationIntent();
 migrateAccountSettingsExtensions();
+migrateWebAuthnPasskeys();
 
 const app = Fastify({
   logger: {
