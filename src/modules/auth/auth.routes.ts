@@ -8,6 +8,7 @@ import { currentUser, requireAuth } from "../../middleware/auth.js";
 import { revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.js";
 import { audit } from "../../lib/audit.js";
 import { badRequest, unauthorized } from "../../lib/errors.js";
+import { normalizeAccountId, isValidAccountId } from "../../lib/crypto.js";
 import { config } from "../../config.js";
 import { listSupportedCountries, isCountryCode } from "../../lib/countries.js";
 import { changeAlias } from "../alias/alias.service.js";
@@ -48,6 +49,14 @@ function refreshCookie(value: string, clear = false): string {
     "Priority=High", `Max-Age=${clear ? 0 : config.REFRESH_TOKEN_TTL_DAYS * 86400}`,
   ].join("; ");
 }
+function savedRefreshCookie(accountId: string, value: string, clear = false): string {
+  const production = config.NODE_ENV === "production";
+  return [
+    `subtlepay_saved_${accountId}=${clear ? "" : encodeURIComponent(value)}`, "Path=/auth", "HttpOnly",
+    `SameSite=${production ? "None" : "Lax"}`, ...(production ? ["Secure"] : []),
+    "Priority=High", `Max-Age=${clear ? 0 : config.REFRESH_TOKEN_TTL_DAYS * 86400}`,
+  ].join("; ");
+}
 function meta(req: { id: string; ip: string; headers: { "user-agent"?: string | string[] } }) {
   const ua = req.headers["user-agent"];
   return { ip: req.ip, userAgent: (Array.isArray(ua) ? ua[0] : ua)?.slice(0, 512), requestId: req.id };
@@ -56,14 +65,32 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/register", { config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req, reply) => {
     const body = registerBody.parse(req.body);
     const result = await register(body.password, meta(req));
-    reply.header("set-cookie", refreshCookie(result.refreshToken));
+    reply.header("set-cookie", [refreshCookie(result.refreshToken), savedRefreshCookie(result.accountId, result.refreshToken)]);
     return { accountId: result.accountId, token: result.token, expiresIn: result.expiresIn, address: result.address };
   });
   app.post("/auth/login", { config: { rateLimit: { max: 10, timeWindow: 60_000 } } }, async (req, reply) => {
     const body = loginBody.parse(req.body);
     const result = await login(body.accountId, body.password, meta(req));
-    reply.header("set-cookie", refreshCookie(result.refreshToken));
+    const accountId = normalizeAccountId(body.accountId);
+    reply.header("set-cookie", [refreshCookie(result.refreshToken), savedRefreshCookie(accountId, result.refreshToken)]);
     return { token: result.token, expiresIn: result.expiresIn };
+  });
+  app.post("/auth/switch-saved", { config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (req, reply) => {
+    const body = z.object({ accountId: z.string().length(27) }).parse(req.body);
+    const accountId = normalizeAccountId(body.accountId);
+    if (!isValidAccountId(accountId)) throw unauthorized("Saved account session is unavailable. Sign in with the account password.");
+    const savedToken = cookieValue(req, `subtlepay_saved_${accountId}`);
+    if (!savedToken) throw unauthorized("No saved session for this account. Sign in with the account password.");
+    try {
+      const next = await rotateSession(savedToken, meta(req));
+      if (next.userId !== accountId) throw unauthorized("Saved session does not match this account.");
+      reply.header("set-cookie", [refreshCookie(next.refreshToken), savedRefreshCookie(accountId, next.refreshToken)]);
+      return { token: next.accessToken, expiresIn: next.accessTokenExpiresIn };
+    } catch (err) {
+      if (err instanceof TokenReuseError) audit(err.userId, "auth.token_reused", undefined, req.ip);
+      reply.header("set-cookie", savedRefreshCookie(accountId, "", true));
+      throw err;
+    }
   });
   app.post("/auth/refresh", async (req, reply) => {
     const body = refreshBody.parse(req.body ?? {});
@@ -71,7 +98,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!refreshToken) throw unauthorized("Refresh session is missing or expired");
     try {
       const next = await rotateSession(refreshToken, meta(req));
-      reply.header("set-cookie", refreshCookie(next.refreshToken));
+      reply.header("set-cookie", [refreshCookie(next.refreshToken), savedRefreshCookie(next.userId, next.refreshToken)]);
       return { token: next.accessToken, expiresIn: next.accessTokenExpiresIn };
     } catch (err) {
       if (err instanceof TokenReuseError) audit(err.userId, "auth.token_reused", undefined, req.ip);
@@ -82,7 +109,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/logout", { preHandler: requireAuth }, async (req, reply) => {
     const user = currentUser(req);
     revokeSession(user.sessionId); audit(user.id, "auth.logout", undefined, req.ip);
-    reply.header("set-cookie", refreshCookie("", true));
+    reply.header("set-cookie", [refreshCookie("", true), savedRefreshCookie(user.id, "", true)]);
     return { ok: true };
   });
   app.post("/auth/change-password", { preHandler: requireAuth }, async (req) => {
