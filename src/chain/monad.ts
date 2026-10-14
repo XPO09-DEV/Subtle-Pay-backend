@@ -52,7 +52,8 @@ function validPerplFees(snapshot: PerplGasSnapshot | null): snapshot is PerplGas
   if (!snapshot || !snapshot.fresh || snapshot.chainId !== 10143) return false;
   const base = bigintOrZero(snapshot.baseFeePerGasWei);
   const p95 = bigintOrZero(snapshot.p95PriorityFeePerGasWei);
-  return base > 0n && p95 > 0n && base <= MAX_PERPL_FEE_WEI && p95 <= MAX_PERPL_FEE_WEI;
+  // Monad fee units are wei; a sub-gwei "base" almost certainly indicates an incompatible payload unit.
+  return base >= 1_000_000_000n && p95 > 0n && base <= MAX_PERPL_FEE_WEI && p95 <= MAX_PERPL_FEE_WEI;
 }
 
 function chooseGasFeePolicy(rpcFees: RpcFeeEstimate | null, perpl: PerplGasSnapshot | null): GasFeePolicy {
