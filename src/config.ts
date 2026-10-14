@@ -18,6 +18,7 @@ const schema = z.object({
   ANKR_API_KEY: z.preprocess((v) => typeof v === "string" && v.trim() ? v.trim() : undefined, z.string().min(1).optional()),
   COINSTATS_API_KEY: z.preprocess((v) => typeof v === "string" && v.trim() ? v.trim() : undefined, z.string().min(1).optional()),
   COINSTATS_API_BASE_URL: z.string().url().default("https://openapiv1.coinstats.app"),
+  PERPL_API_URL: z.preprocess((v) => typeof v === "string" && v.trim() ? v.trim() : undefined, z.string().url().default("https://testnet.perpl.xyz/api")),
   ADMIN_API_TOKEN: z.preprocess((v) => typeof v === "string" && v.trim() ? v.trim() : undefined, z.string().min(32, "must be at least 32 characters").optional()),
   JWT_ACCESS_SECRET: hexBytes(32),
   PASSWORD_PEPPER: hexBytes(32),
@@ -40,6 +41,14 @@ const schema = z.object({
   STABLE_TOKEN_ADDRESS: optionalAddress,
 }).superRefine((cfg, ctx) => {
   if (cfg.MONAD_CHAIN_ID !== 10143) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["MONAD_CHAIN_ID"], message: "Subtle Pay hackathon builds are locked to Monad Testnet chain ID 10143" });
+  try {
+    const perplUrl = new URL(cfg.PERPL_API_URL);
+    if (perplUrl.protocol !== "https:" || perplUrl.hostname !== "testnet.perpl.xyz" || perplUrl.pathname.replace(/\/+$/, "") !== "/api" || perplUrl.search || perplUrl.hash) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["PERPL_API_URL"], message: "must use https://testnet.perpl.xyz/api for Monad Testnet; mainnet Perpl data is not allowed in this hackathon build" });
+    }
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["PERPL_API_URL"], message: "must be a valid Perpl Testnet API URL" });
+  }
   const secrets = {
     JWT_ACCESS_SECRET: cfg.JWT_ACCESS_SECRET.toLowerCase(),
     PASSWORD_PEPPER: cfg.PASSWORD_PEPPER.toLowerCase(),
