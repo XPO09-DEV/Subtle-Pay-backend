@@ -8,16 +8,20 @@ import { currentUser, requireAuth } from "../../middleware/auth.js";
 import { revokeSession, rotateSession, TokenReuseError } from "../../lib/tokens.js";
 import { audit } from "../../lib/audit.js";
 import { badRequest, unauthorized } from "../../lib/errors.js";
+import { normalizeAccountId, isValidAccountId } from "../../lib/crypto.js";
 import { config } from "../../config.js";
+import { listSupportedCountries, isCountryCode } from "../../lib/countries.js";
+import { changeAlias } from "../alias/alias.service.js";
 
 const passwordSchema = z.string().min(1).max(128);
 const registerBody = z.object({ password: passwordSchema });
 const loginBody = z.object({ accountId: z.string().min(10).max(40), password: passwordSchema });
 const changeBody = z.object({ oldPassword: passwordSchema, newPassword: passwordSchema });
-const currencyBody = z.object({ currency: z.string().length(3) });
+const currencyBody = z.object({ currency: z.string().length(3), currentPassword: passwordSchema });
 const profileBody = z.object({
   displayName: z.union([z.string().trim().max(80), z.null()]).optional(),
   region: z.union([z.string().trim().min(1).max(80), z.null()]).optional(),
+  country: z.union([z.string().length(2).refine(isCountryCode), z.null()]).optional(),
   shareRegion: z.boolean().optional(),
 }).superRefine((value, ctx) => {
   if (value.shareRegion === true && !value.region?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["region"], message: "Choose a region to share" });
@@ -45,6 +49,14 @@ function refreshCookie(value: string, clear = false): string {
     "Priority=High", `Max-Age=${clear ? 0 : config.REFRESH_TOKEN_TTL_DAYS * 86400}`,
   ].join("; ");
 }
+function savedRefreshCookie(accountId: string, value: string, clear = false): string {
+  const production = config.NODE_ENV === "production";
+  return [
+    `subtlepay_saved_${accountId}=${clear ? "" : encodeURIComponent(value)}`, "Path=/auth", "HttpOnly",
+    `SameSite=${production ? "None" : "Lax"}`, ...(production ? ["Secure"] : []),
+    "Priority=High", `Max-Age=${clear ? 0 : config.REFRESH_TOKEN_TTL_DAYS * 86400}`,
+  ].join("; ");
+}
 function meta(req: { id: string; ip: string; headers: { "user-agent"?: string | string[] } }) {
   const ua = req.headers["user-agent"];
   return { ip: req.ip, userAgent: (Array.isArray(ua) ? ua[0] : ua)?.slice(0, 512), requestId: req.id };
@@ -53,14 +65,32 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/register", { config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req, reply) => {
     const body = registerBody.parse(req.body);
     const result = await register(body.password, meta(req));
-    reply.header("set-cookie", refreshCookie(result.refreshToken));
+    reply.header("set-cookie", [refreshCookie(result.refreshToken), savedRefreshCookie(result.accountId, result.refreshToken)]);
     return { accountId: result.accountId, token: result.token, expiresIn: result.expiresIn, address: result.address };
   });
   app.post("/auth/login", { config: { rateLimit: { max: 10, timeWindow: 60_000 } } }, async (req, reply) => {
     const body = loginBody.parse(req.body);
     const result = await login(body.accountId, body.password, meta(req));
-    reply.header("set-cookie", refreshCookie(result.refreshToken));
+    const accountId = normalizeAccountId(body.accountId);
+    reply.header("set-cookie", [refreshCookie(result.refreshToken), savedRefreshCookie(accountId, result.refreshToken)]);
     return { token: result.token, expiresIn: result.expiresIn };
+  });
+  app.post("/auth/switch-saved", { config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (req, reply) => {
+    const body = z.object({ accountId: z.string().length(27) }).parse(req.body);
+    const accountId = normalizeAccountId(body.accountId);
+    if (!isValidAccountId(accountId)) throw unauthorized("Saved account session is unavailable. Sign in with the account password.");
+    const savedToken = cookieValue(req, `subtlepay_saved_${accountId}`);
+    if (!savedToken) throw unauthorized("No saved session for this account. Sign in with the account password.");
+    try {
+      const next = await rotateSession(savedToken, meta(req));
+      if (next.userId !== accountId) throw unauthorized("Saved session does not match this account.");
+      reply.header("set-cookie", [refreshCookie(next.refreshToken), savedRefreshCookie(accountId, next.refreshToken)]);
+      return { token: next.accessToken, expiresIn: next.accessTokenExpiresIn };
+    } catch (err) {
+      if (err instanceof TokenReuseError) audit(err.userId, "auth.token_reused", undefined, req.ip);
+      reply.header("set-cookie", savedRefreshCookie(accountId, "", true));
+      throw err;
+    }
   });
   app.post("/auth/refresh", async (req, reply) => {
     const body = refreshBody.parse(req.body ?? {});
@@ -68,7 +98,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!refreshToken) throw unauthorized("Refresh session is missing or expired");
     try {
       const next = await rotateSession(refreshToken, meta(req));
-      reply.header("set-cookie", refreshCookie(next.refreshToken));
+      reply.header("set-cookie", [refreshCookie(next.refreshToken), savedRefreshCookie(next.userId, next.refreshToken)]);
       return { token: next.accessToken, expiresIn: next.accessTokenExpiresIn };
     } catch (err) {
       if (err instanceof TokenReuseError) audit(err.userId, "auth.token_reused", undefined, req.ip);
@@ -79,14 +109,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/auth/logout", { preHandler: requireAuth }, async (req, reply) => {
     const user = currentUser(req);
     revokeSession(user.sessionId); audit(user.id, "auth.logout", undefined, req.ip);
-    reply.header("set-cookie", refreshCookie("", true));
+    reply.header("set-cookie", [refreshCookie("", true), savedRefreshCookie(user.id, "", true)]);
     return { ok: true };
   });
   app.post("/auth/change-password", { preHandler: requireAuth }, async (req) => {
     const user = currentUser(req); const body = changeBody.parse(req.body);
     return changePassword(user.id, user.sessionId, body.oldPassword, body.newPassword, req.ip);
   });
+  app.get("/meta/countries", async () => ({ countries: listSupportedCountries() }));
   app.get("/me", { preHandler: requireAuth }, async (req) => getMe(currentUser(req).id));
+  app.put("/me/alias", { preHandler: requireAuth, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req) => {
+    const body = z.object({ alias: z.string().min(3).max(24), currentPassword: passwordSchema }).parse(req.body);
+    const user = currentUser(req);
+    return changeAlias(user.id, body.alias, body.currentPassword, req.ip);
+  });
 
   app.get("/me/login-events", { preHandler: requireAuth, config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (req) => {
     const query = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query);
@@ -147,7 +183,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({ currentPassword: passwordSchema, confirmation: z.literal("DELETE") }).parse(req.body);
     const user = currentUser(req);
     const result = await deleteAccount(user.id, body.currentPassword, req.ip);
-    reply.header("set-cookie", refreshCookie("", true));
+    reply.header("set-cookie", [refreshCookie("", true), savedRefreshCookie(user.id, "", true)]);
     return result;
   });
   app.get("/home", { preHandler: requireAuth }, async (req) => {
@@ -156,7 +192,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
   app.put("/me/currency", { preHandler: requireAuth }, async (req) => {
     const body = currencyBody.parse(req.body);
-    return setCurrency(currentUser(req).id, body.currency);
+    return setCurrency(currentUser(req).id, body.currency, body.currentPassword);
   });
   app.put("/me/profile", { preHandler: requireAuth }, async (req) => {
     const body = profileBody.parse(req.body);

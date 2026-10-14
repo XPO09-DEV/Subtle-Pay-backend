@@ -8,6 +8,7 @@ import { badRequest, invalidCredentials } from "../../lib/errors.js";
 import { assertCurrency, type Currency } from "../../lib/currency.js";
 import { audit } from "../../lib/audit.js";
 import { createPayQrPayload } from "../../lib/paymentQr.js";
+import { isCountryCode } from "../../lib/countries.js";
 
 function recordLoginEvent(input: {
   accountId: string | null; attemptedId: string; success: boolean;
@@ -105,8 +106,8 @@ export async function changePassword(userId: string, sessionId: string, oldPassw
   return { ok: true };
 }
 export function getMe(userId: string) {
-  const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at, created_at FROM users WHERE id = ? AND deleted_at IS NULL").get(userId) as
-    | { id: string; currency: string; display_name: string | null; region: string | null; region_consent_at: number | null; created_at: number } | undefined;
+  const user = db.prepare("SELECT id, currency, display_name, region, region_consent_at, country, created_at FROM users WHERE id = ? AND deleted_at IS NULL").get(userId) as
+    | { id: string; currency: string; display_name: string | null; region: string | null; region_consent_at: number | null; country: string | null; created_at: number } | undefined;
   if (!user) throw invalidCredentials();
   const alias = db.prepare("SELECT alias FROM aliases WHERE user_id = ?").get(userId) as { alias: string } | undefined;
   const wallet = db.prepare("SELECT address, created_at FROM wallets WHERE user_id = ?").get(userId) as { address: string; created_at: number } | undefined;
@@ -118,12 +119,12 @@ export function getMe(userId: string) {
     accountId: user.id, alias: alias?.alias ?? null, displayName: user.display_name, currency: user.currency,
     accountCreatedAt: user.created_at, lastLoginAt: lastLogin?.last_login_at ?? null,
     walletAddress: wallet?.address ?? null, walletCreatedAt: wallet?.created_at ?? null,
-    region: user.region_consent_at ? user.region : null, regionConsentAt: user.region_consent_at,
+    region: user.region_consent_at ? user.region : null, regionConsentAt: user.region_consent_at, country: user.country,
   };
 }
-export function updateProfile(userId: string, input: { displayName?: string | null; region?: string | null; shareRegion?: boolean }) {
-  const existing = db.prepare("SELECT display_name, region, region_consent_at FROM users WHERE id = ?").get(userId) as
-    | { display_name: string | null; region: string | null; region_consent_at: number | null } | undefined;
+export function updateProfile(userId: string, input: { displayName?: string | null; region?: string | null; shareRegion?: boolean; country?: string | null }) {
+  const existing = db.prepare("SELECT display_name, region, region_consent_at, country FROM users WHERE id = ?").get(userId) as
+    | { display_name: string | null; region: string | null; region_consent_at: number | null; country: string | null } | undefined;
   if (!existing) throw invalidCredentials();
   let displayName = existing.display_name;
   if (input.displayName !== undefined) { const cleaned = input.displayName?.trim().slice(0, 80) ?? ""; displayName = cleaned || null; }
@@ -134,8 +135,14 @@ export function updateProfile(userId: string, input: { displayName?: string | nu
     if (!cleanedRegion) throw badRequest("Choose a region before opting in to share it", "BAD_REQUEST");
     region = cleanedRegion; regionConsentAt = Date.now();
   } else if (input.shareRegion === false) { region = null; regionConsentAt = null; }
-  db.prepare("UPDATE users SET display_name = ?, region = ?, region_consent_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
-    .run(displayName, region, regionConsentAt, Date.now(), userId);
+  let country = existing.country;
+  if (input.country !== undefined) {
+    const candidate = input.country?.trim().toUpperCase() ?? "";
+    if (candidate && !isCountryCode(candidate)) throw badRequest("Choose a valid country from the supported list", "INVALID_COUNTRY");
+    country = candidate || null;
+  }
+  db.prepare("UPDATE users SET display_name = ?, region = ?, region_consent_at = ?, country = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+    .run(displayName, region, regionConsentAt, country, Date.now(), userId);
 
   // A human-readable handle is assigned once on the first profile-name save.
   // Existing handles are never changed by editing the display name.
@@ -156,11 +163,16 @@ export function updateProfile(userId: string, input: { displayName?: string | nu
       }
     }
   }
-  return { displayName, alias: aliasRow?.alias ?? null, region: regionConsentAt ? region : null, regionConsentAt };
+  return { displayName, alias: aliasRow?.alias ?? null, region: regionConsentAt ? region : null, regionConsentAt, country };
 }
-export function setCurrency(userId: string, currency: string): { currency: Currency } {
+export async function setCurrency(userId: string, currency: string, currentPassword: string): Promise<{ currency: Currency }> {
   const code = assertCurrency(currency);
+  const user = db.prepare("SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL").get(userId) as { password_hash: string } | undefined;
+  if (!user || !(await verifyPassword(user.password_hash, currentPassword))) {
+    throw badRequest("Current password is incorrect", "INVALID_CREDENTIALS");
+  }
   db.prepare("UPDATE users SET currency = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL").run(code, Date.now(), userId);
+  audit(userId, "profile.currency_changed", { currency: code });
   return { currency: code };
 }
 
@@ -175,6 +187,7 @@ export async function deleteAccount(userId: string, currentPassword: string, ip?
   revokeAllSessions(userId);
   withTransaction(() => {
     db.prepare("DELETE FROM aliases WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM alias_history WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM wallet_qr WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM pin_credentials WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM payment_authorizations WHERE user_id = ?").run(userId);
