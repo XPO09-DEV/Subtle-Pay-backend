@@ -187,6 +187,7 @@ export async function deleteAccount(userId: string, currentPassword: string, ip?
   revokeAllSessions(userId);
   withTransaction(() => {
     db.prepare("DELETE FROM aliases WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM alias_history WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM wallet_qr WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM pin_credentials WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM payment_authorizations WHERE user_id = ?").run(userId);
