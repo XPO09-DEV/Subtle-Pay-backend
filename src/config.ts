@@ -13,7 +13,7 @@ const schema = z.object({
   CORS_ORIGINS: z.string().default("http://localhost:5174,http://localhost:5173").transform((s) => s.split(",").map((o) => o.trim()).filter(Boolean)),
   WEBAUTHN_RP_NAME: z.string().trim().min(1).max(80).default("Subtle Pay"),
   WEBAUTHN_RP_ID: z.string().trim().min(1).max(253).default("localhost"),
-  WEBAUTHN_ORIGIN: z.string().url().default("http://localhost:5174"),
+  WEBAUTHN_ORIGIN: z.string().url().default("http://localhost:5173"),
   DB_PATH: z.string().default("./data/subtle.db"),
   ANKR_API_KEY: z.preprocess((v) => typeof v === "string" && v.trim() ? v.trim() : undefined, z.string().min(1).optional()),
   COINSTATS_API_KEY: z.preprocess((v) => typeof v === "string" && v.trim() ? v.trim() : undefined, z.string().min(1).optional()),
