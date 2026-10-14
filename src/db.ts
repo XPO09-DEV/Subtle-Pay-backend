@@ -381,6 +381,9 @@ export interface TransactionRow {
   created_at: number;
   updated_at: number;
   confirmed_at: number | null;
+  gas_used: string | null;
+  effective_gas_price_wei: string | null;
+  fee_paid_wei: string | null;
 }
 
 export type WithdrawalStatus = "pending" | "processing" | "completed" | "failed";
