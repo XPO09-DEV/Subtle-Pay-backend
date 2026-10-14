@@ -9,6 +9,7 @@ import { migrateWalletFeatures } from "./migrations/006-wallet-security-and-merc
 import { migratePaymentAuthorizationIntent } from "./migrations/007-payment-authorization-intent.js";
 import { migrateAccountSettingsExtensions } from "./migrations/008-account-settings-extensions.js";
 import { migrateWebAuthnPasskeys } from "./migrations/009-webauthn-passkeys.js";
+import { migrateTransactionGasMetadata } from "./migrations/010-transaction-gas-metadata.js";
 import { errorHandler, notFoundHandler } from "./lib/errors.js";
 import { initPassword } from "./lib/password.js";
 import { kmsSelfTest } from "./lib/kms.js";
@@ -36,6 +37,7 @@ migrateWalletFeatures();
 migratePaymentAuthorizationIntent();
 migrateAccountSettingsExtensions();
 migrateWebAuthnPasskeys();
+migrateTransactionGasMetadata();
 
 const app = Fastify({
   logger: {
