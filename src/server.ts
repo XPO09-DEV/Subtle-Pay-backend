@@ -40,6 +40,9 @@ migrateWebAuthnPasskeys();
 migrateTransactionGasMetadata();
 
 const app = Fastify({
+  // Some deployed/local frontend builds still prepend /api. Rewrite before routing
+  // so both /qr/pay and /api/qr/pay (and other API routes) reach the same handlers.
+  rewriteUrl: (request) => request.url.startsWith("/api/") ? request.url.slice(4) : request.url,
   logger: {
     level: config.LOG_LEVEL,
     transport: isProd ? undefined : { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } },
